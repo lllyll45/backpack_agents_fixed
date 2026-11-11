@@ -1,735 +1,107 @@
 package agents;
 
-import jade.core.AID;
 import jade.core.Agent;
 import jade.core.behaviours.CyclicBehaviour;
-import jade.core.behaviours.TickerBehaviour;
 import jade.domain.DFService;
 import jade.domain.FIPAAgentManagement.DFAgentDescription;
 import jade.domain.FIPAAgentManagement.ServiceDescription;
 import jade.domain.FIPAException;
 import jade.lang.acl.ACLMessage;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
 
+/**
+ * Турист. Знает содержимое только своего рюкзака.
+ * Этап 1: принимает предложения предметов (при необходимости освобождая место).
+ * Этап 2: обменивается предметами с туристами противоположной группы (лёгкие/тяжёлые).
+ * Создаётся клиентом (ClientMain) при подключении к серверу.
+ */
 public class TouristAgent extends Agent {
-    private final List<String> myItems = new ArrayList<>();
-    private final Map<String, Double> itemWeights = new HashMap<>();
-    private final Map<String, Double> allTouristWeights = new LinkedHashMap<>();
-    private final Set<String> triedPartners = new HashSet<>();
 
-    private AID manager;
-    private double capacity = 12.0;
-    private double myWeight;
-    private double avgWeight;
-    private double currentDiff;
-    private int epoch;
+    private static final class Item {
+        final String id;
+        final String name;
+        final int g;
 
-    private boolean distributionConfigured;
-    private boolean distributionComplete;
-    private boolean optimizationStarted;
-    private boolean pendingDistribution;
-    private boolean reportedNoImprovement;
-    private boolean stopped;
+        Item(String id, String name, int g) {
+            this.id = id;
+            this.name = name;
+            this.g = g;
+        }
+    }
 
-    private String pendingNewItem;
-    private String pendingOldItem;
-    private AID pendingNewItemAgent;
+    private static final class Choice {
+        List<Item> set;
+        int sum;
+    }
 
-    private String transaction;
-    private String role;
-    private String partnerName;
-    private String ownGive;
-    private String partnerGive;
-    private double ownGiveWeight;
-    private double partnerGiveWeight;
+    private enum Role {NONE, WAIT_REPLY, WAIT_DONE, WAIT_CONFIRM}
 
-    private boolean waitingWeight;
-    private boolean waitingOwnLock;
-    private boolean waitingPartnerLock;
-    private boolean waitingPartnerTransfer;
-    private boolean waitingOwnTransfer;
+    private static final long WAIT_REPLY = 10000;
+    private static final long WAIT_CONFIRM = 10000;
+    private static final long WAIT_DONE = 60000;
+
+    private final Map<String, Item> bag = new LinkedHashMap<>();
+    private final Random rnd = new Random();
+
+    private boolean active;      // менеджер активировал этого туриста
+    private boolean balancing;   // идёт этап 2
+    private boolean stopping;    // получена команда остановки
+    private boolean finalSent;
+    private int capacity;
+    private double avg;
+    private List<String> roster = new ArrayList<>();
+
+    // текущая операция обмена
+    private Role role = Role.NONE;
+    private String opId;
+    private String partner;
+    private Item mine;           // мой предмет, отдаваемый в обмен
+    private Item theirs;         // предмет партнёра
+    private long deadline;
+    private int opSeq;
+    private long nextAttemptAt;
 
     @Override
     protected void setup() {
-        register();
+        try {
+            DFAgentDescription dfd = new DFAgentDescription();
+            dfd.setName(getAID());
+            ServiceDescription sd = new ServiceDescription();
+            sd.setType(Common.TOURIST_SERVICE);
+            sd.setName(getLocalName());
+            dfd.addServices(sd);
+            DFService.register(this, dfd);
+        } catch (FIPAException e) {
+            e.printStackTrace();
+            doDelete();
+            return;
+        }
+        System.out.println("[" + getLocalName() + "] турист подключился к серверу");
 
         addBehaviour(new CyclicBehaviour(this) {
             @Override
             public void action() {
-                ACLMessage msg = receive();
-                if (msg == null) {
-                    block();
-                    return;
+                ACLMessage m;
+                while ((m = myAgent.receive()) != null) {
+                    TouristAgent.this.handle(m);
                 }
-                TouristAgent.this.handle(msg);
+                long now = System.currentTimeMillis();
+                checkTimeout(now);
+                if (balancing && !stopping && role == Role.NONE && now >= nextAttemptAt) {
+                    tryInitiate(now);
+                }
+                if (stopping && role == Role.NONE && !finalSent) {
+                    sendFinal();
+                }
+                block(50);
             }
         });
-
-        addBehaviour(new TickerBehaviour(this, 1200) {
-            @Override
-            protected void onTick() {
-                if (manager == null) {
-                    manager = findManager();
-                }
-                if (stopped || !optimizationStarted || busy() || reportedNoImprovement) {
-                    return;
-                }
-                tryInitiateExchange();
-            }
-        });
-
-        log("Запущен.");
-    }
-
-    private void handle(ACLMessage msg) {
-        String content = msg.getContent() == null ? "" : msg.getContent();
-        String sender = msg.getSender().getLocalName();
-
-        if (content.startsWith("DISTRIBUTION_CONFIG|")) {
-            String[] p = content.split("\\|", 3);
-            if (p.length == 3) {
-                capacity = number(p[1]);
-                parseWeights(p[2]);
-                distributionConfigured = true;
-                log("Получены настройки распределения. Вместимость рюкзака: " +
-                        fmt(capacity) + " кг. Известно предметов: " + itemWeights.size());
-            }
-        } else if (content.startsWith("OFFER_ITEM|")) {
-            handleItemOffer(msg, content);
-        } else if (content.startsWith("ITEM_RELEASED|")) {
-            if (pendingDistribution) {
-                log("Освободил предмет " + pendingOldItem +
-                        ". Подтверждаю принятие " + pendingNewItem);
-                myItems.remove(pendingOldItem);
-                pendingOldItem = null;
-                sendTo(pendingNewItemAgent, "TAKE_ITEM|" + pendingNewItem);
-            }
-        } else if (content.startsWith("ITEM_RELEASE_REFUSED|")) {
-            log("Не удалось освободить " + pendingOldItem +
-                    ". Предложение нового предмета отклонено.");
-            if (pendingNewItem != null) {
-                sendTo(manager, "REJECT_ITEM|" + pendingNewItem + "|" + bagSignature());
-            }
-            resetPendingDistribution();
-        } else if (content.startsWith("ITEM_TAKE_REFUSED|")) {
-            if (pendingNewItem != null) {
-                log("Предметный агент отказал в передаче " + pendingNewItem + ".");
-                sendTo(manager, "REJECT_ITEM|" + pendingNewItem + "|" + bagSignature());
-            }
-            resetPendingDistribution();
-        } else if (content.startsWith("ITEM_ACCEPTED|")) {
-            String[] p = content.split("\\|", 3);
-            if (p.length == 3) {
-                if (!myItems.contains(p[1])) myItems.add(p[1]);
-                itemWeights.put(p[1], number(p[2]));
-                recalculateWeight();
-                log("ПРИНЯЛ предмет " + p[1] + ". Масса рюкзака: " + fmt(myWeight) + " кг");
-                resetPendingDistribution();
-            }
-        } else if (content.startsWith("DISTRIBUTION_COMPLETE|")) {
-            String items = content.substring("DISTRIBUTION_COMPLETE|".length());
-            myItems.clear();
-            if (!items.equals("-")) myItems.addAll(Arrays.asList(items.split(";")));
-            recalculateWeight();
-            distributionComplete = true;
-            resetPendingDistribution();
-            sendBagMass("INIT");
-            log("Первоначальное распределение завершено. Предметов: " +
-                    myItems.size() + ", масса рюкзака: " + fmt(myWeight) + " кг");
-        } else if (content.startsWith("GLOBAL_STATE|")) {
-            String[] p = content.split("\\|", 5);
-            if (p.length >= 5) {
-                avgWeight = number(p[1]);
-                currentDiff = number(p[2]);
-                parseTouristWeights(p[3]);
-                epoch = (int) number(p[4]);
-                myWeight = allTouristWeights.getOrDefault(getLocalName(), myWeight);
-                optimizationStarted = true;
-                triedPartners.clear();
-                reportedNoImprovement = false;
-                clearExchange();
-                log("Получено состояние оптимизации №" + epoch +
-                        ". Моя масса: " + fmt(myWeight) +
-                        " кг; средняя: " + fmt(avgWeight) +
-                        " кг; общий разброс: " + fmt(currentDiff) + " кг");
-            }
-        } else if (content.startsWith("REQUEST_WEIGHT|")) {
-            sendTo(msg.getSender(), "WEIGHT_INFO|" + getLocalName() + "|" + myWeight);
-        } else if (content.startsWith("WEIGHT_INFO|")) {
-            handleWeightInfo(sender, content);
-        } else if (content.startsWith("PROPOSE_SWAP|")) {
-            handleProposal(msg, content);
-        } else if (content.startsWith("ACCEPT_SWAP|")) {
-            handleAccept(sender, content);
-        } else if (content.startsWith("REJECT_SWAP|")) {
-            log("Турист " + sender + " отклонил предложение обмена. " + content);
-            triedPartners.add(sender);
-            clearExchange();
-        } else if (content.startsWith("LOCK_OK|")) {
-            handleLockOk(content);
-        } else if (content.startsWith("LOCK_REFUSED|")) {
-            log("Не удалось заблокировать предмет для обмена с " + partnerName);
-            if (partnerName != null) {
-                sendTo(new AID(partnerName, AID.ISLOCALNAME),
-                        "REJECT_SWAP|" + transaction + "|не удалось заблокировать предмет");
-                triedPartners.add(partnerName);
-            }
-            clearExchange();
-        } else if (content.startsWith("LOCK_PARTNER|")) {
-            handlePartnerLock(msg, content);
-        } else if (content.startsWith("PARTNER_LOCKED|")) {
-            if ("INITIATOR".equals(role) && transaction != null &&
-                    content.contains(transaction)) {
-                log("Партнёр " + partnerName + " заблокировал свой предмет. Начинается обмен.");
-                sendTo(new AID(partnerName, AID.ISLOCALNAME), "COMMIT_SWAP|" + transaction);
-            }
-        } else if (content.startsWith("COMMIT_SWAP|")) {
-            if ("RECEIVER".equals(role) && transaction != null &&
-                    content.contains(transaction)) {
-                transferOwnItemToPartner();
-            }
-        } else if (content.startsWith("OWNER_CHANGED|")) {
-            handleOwnerChanged(content);
-        } else if (content.startsWith("PARTNER_TRANSFER_DONE|")) {
-            if ("INITIATOR".equals(role) && transaction != null &&
-                    content.contains(transaction)) {
-                log("Партнёр завершил передачу своего предмета. Передаю свой предмет.");
-                transferOwnItemToPartner();
-            }
-        } else if (content.startsWith("STOP|")) {
-            stopped = true;
-            log("Получена команда завершения: " +
-                    content.substring("STOP|".length()));
-        }
-    }
-
-    private void handleItemOffer(ACLMessage msg, String content) {
-        String[] p = content.split("\\|", 4);
-        if (p.length != 4) return;
-
-        String offered = p[1];
-        double offeredWeight = number(p[2]);
-        AID offeredAgent = findItemAgent(offered);
-        if (offeredAgent == null || !offeredAgent.getLocalName().equals(p[3])) {
-            log("Не найден агент предложенного предмета " + offered + ". Предложение отклонено.");
-            sendTo(manager, "REJECT_ITEM|" + offered + "|" + bagSignature());
-            return;
-        }
-
-        log("Получил предложение предмета " + offered +
-                " массой " + fmt(offeredWeight) + " кг от " +
-                msg.getSender().getLocalName());
-
-        if (!distributionConfigured || pendingDistribution || stopped) {
-            log("Отклонил " + offered + ": турист пока не готов принять предмет.");
-            sendTo(manager, "REJECT_ITEM|" + offered + "|" + bagSignature());
-            return;
-        }
-
-        if (myItems.contains(offered)) {
-            log("Отклонил " + offered + ": предмет уже находится в рюкзаке.");
-            sendTo(manager, "REJECT_ITEM|" + offered + "|" + bagSignature());
-            return;
-        }
-
-        double afterAdd = myWeight + offeredWeight;
-        if (afterAdd <= capacity + 1e-9) {
-            pendingDistribution = true;
-            pendingNewItem = offered;
-            pendingNewItemAgent = offeredAgent;
-            log("Принимает " + offered + " без освобождения другого предмета. " +
-                    "Расчётная масса: " + fmt(afterAdd) + " кг.");
-            sendTo(pendingNewItemAgent, "TAKE_ITEM|" + offered);
-            return;
-        }
-
-        String bestRemove = null;
-        double bestDistance = Double.MAX_VALUE;
-
-        for (String existing : myItems) {
-            double newWeight = myWeight + offeredWeight -
-                    itemWeights.getOrDefault(existing, 0.0);
-            if (newWeight <= capacity + 1e-9) {
-                double distance = Math.abs(capacity - newWeight);
-                if (distance < bestDistance) {
-                    bestDistance = distance;
-                    bestRemove = existing;
-                }
-            }
-        }
-
-        if (bestRemove == null) {
-            log("Отклонил " + offered + ": нет предмета, освобождение которого " +
-                    "позволит уложиться во вместимость " + fmt(capacity) + " кг.");
-            sendTo(manager, "REJECT_ITEM|" + offered + "|" + bagSignature());
-            return;
-        }
-
-        pendingDistribution = true;
-        pendingNewItem = offered;
-        pendingOldItem = bestRemove;
-        pendingNewItemAgent = offeredAgent;
-
-        log("Для принятия " + offered + " выбрал освободить " + bestRemove +
-                ". Расчётная масса после замены: " +
-                fmt(myWeight + offeredWeight - itemWeights.getOrDefault(bestRemove, 0.0)) +
-                " кг.");
-
-        AID oldAgent = findItemAgent(bestRemove);
-        if (oldAgent == null) {
-            log("Не найден агент освобождаемого предмета " + bestRemove +
-                    ". Отклоняю предложение.");
-            resetPendingDistribution();
-            sendTo(manager, "REJECT_ITEM|" + offered + "|" + bagSignature());
-        } else {
-            sendTo(oldAgent, "RELEASE_ITEM|" + offered);
-        }
-    }
-
-    private void tryInitiateExchange() {
-        if (!distributionComplete || !optimizationStarted || busy()) return;
-
-        List<String> candidates = new ArrayList<>();
-        for (Map.Entry<String, Double> entry : allTouristWeights.entrySet()) {
-            if (!entry.getKey().equals(getLocalName())
-                    && (myWeight - avgWeight) * (entry.getValue() - avgWeight) < -1e-9
-                    && !triedPartners.contains(entry.getKey())) {
-                candidates.add(entry.getKey());
-            }
-        }
-
-        if (candidates.isEmpty()) {
-            reportNoImprovement();
-            return;
-        }
-
-        Collections.sort(candidates);
-        partnerName = candidates.get(0);
-
-        // Для каждой пары в раунде выбирается один инициатор.
-        String first = getLocalName().compareTo(partnerName) <= 0
-                ? getLocalName() : partnerName;
-        String second = getLocalName().compareTo(partnerName) <= 0
-                ? partnerName : getLocalName();
-        String elected = (epoch % 2 == 0) ? first : second;
-
-        if (!getLocalName().equals(elected)) return;
-
-        role = "INITIATOR";
-        waitingWeight = true;
-        transaction = getLocalName() + "_" + epoch + "_" + System.nanoTime();
-
-        log("Инициирует обмен с " + partnerName +
-                ". Моя масса: " + fmt(myWeight) + " кг, масса партнёра: " +
-                fmt(allTouristWeights.getOrDefault(partnerName, 0.0)) + " кг.");
-        sendTo(new AID(partnerName, AID.ISLOCALNAME),
-                "REQUEST_WEIGHT|" + transaction);
-    }
-
-    private void handleWeightInfo(String sender, String content) {
-        if (!waitingWeight || !sender.equals(partnerName)) return;
-
-        String[] p = content.split("\\|", 3);
-        if (p.length < 3) {
-            triedPartners.add(sender);
-            clearExchange();
-            return;
-        }
-
-        double partnerWeight = number(p[2]);
-        ownGive = chooseItemToGive();
-
-        if (ownGive == null) {
-            log("Не найден предмет для предложения туристу " + sender);
-            triedPartners.add(sender);
-            clearExchange();
-            return;
-        }
-
-        ownGiveWeight = itemWeights.getOrDefault(ownGive, 0.0);
-        waitingWeight = false;
-        waitingPartnerLock = true;
-
-        log("Выбрал предмет " + ownGive + " (" + fmt(ownGiveWeight) +
-                " кг) для обмена с " + sender + ".");
-        sendTo(new AID(sender, AID.ISLOCALNAME),
-                "PROPOSE_SWAP|" + transaction + "|" + ownGive + "|" +
-                        ownGiveWeight + "|" + myWeight + "|" + partnerWeight);
-    }
-
-    private String chooseItemToGive() {
-        String best = null;
-        double bestDistance = Double.MAX_VALUE;
-
-        for (String item : myItems) {
-            double x = itemWeights.getOrDefault(item, 0.0);
-            double distance = Math.abs(myWeight - x - avgWeight);
-            if (distance < bestDistance) {
-                bestDistance = distance;
-                best = item;
-            }
-        }
-        return best;
-    }
-
-    private void handleProposal(ACLMessage msg, String content) {
-        String sender = msg.getSender().getLocalName();
-        String[] p = content.split("\\|", 6);
-
-        if (p.length < 6 || busy()) {
-            log("Отклонил предложение обмена от " + sender +
-                    ": сейчас занят другой операцией или сообщение некорректно.");
-            sendTo(msg.getSender(), "REJECT_SWAP|busy");
-            return;
-        }
-
-        String tx = p[1];
-        String offeredItem = p[2];
-        double offeredWeight = number(p[3]);
-        double initiatorWeight = number(p[4]);
-
-        String best = null;
-        double bestDistance = Double.MAX_VALUE;
-
-        for (String item : myItems) {
-            double y = itemWeights.getOrDefault(item, 0.0);
-            double distance = Math.abs(myWeight - y + offeredWeight - avgWeight);
-            if (distance < bestDistance) {
-                bestDistance = distance;
-                best = item;
-            }
-        }
-
-        if (best == null) {
-            log("Отклонил обмен от " + sender + ": в рюкзаке нет предмета для ответного обмена.");
-            sendTo(msg.getSender(), "REJECT_SWAP|" + tx + "|нет предмета для обмена");
-            return;
-        }
-
-        double takeWeight = itemWeights.getOrDefault(best, 0.0);
-        double initiatorNew = initiatorWeight - offeredWeight + takeWeight;
-        double receiverNew = myWeight - takeWeight + offeredWeight;
-
-        if (!improvesGlobal(sender, initiatorNew, getLocalName(), receiverNew)) {
-            log("Отклонил обмен от " + sender +
-                    ": общий разброс масс не уменьшается.");
-            sendTo(msg.getSender(),
-                    "REJECT_SWAP|" + tx + "|общий разброс не уменьшается");
-            return;
-        }
-
-        transaction = tx;
-        partnerName = sender;
-        role = "RECEIVER";
-        ownGive = best;
-        ownGiveWeight = takeWeight;
-        partnerGive = offeredItem;
-        partnerGiveWeight = offeredWeight;
-        waitingPartnerLock = true;
-
-        log("Согласен на обмен с " + sender + ". Отдаёт " + best +
-                " (" + fmt(takeWeight) + " кг), получает " + offeredItem +
-                " (" + fmt(offeredWeight) + " кг).");
-        sendTo(msg.getSender(),
-                "ACCEPT_SWAP|" + tx + "|" + best + "|" + takeWeight);
-    }
-
-    private void handleAccept(String sender, String content) {
-        if (!"INITIATOR".equals(role) || !sender.equals(partnerName)) return;
-
-        String[] p = content.split("\\|", 4);
-        if (p.length < 4) return;
-
-        partnerGive = p[2];
-        partnerGiveWeight = number(p[3]);
-
-        double newOwn = myWeight - ownGiveWeight + partnerGiveWeight;
-        double partnerOld = allTouristWeights.getOrDefault(partnerName, 0.0);
-        double partnerNew = partnerOld - partnerGiveWeight + ownGiveWeight;
-
-        if (!improvesGlobal(getLocalName(), newOwn, partnerName, partnerNew)) {
-            log("Получил согласие от " + sender +
-                    ", но отклоняет обмен после повторной проверки.");
-            sendTo(new AID(partnerName, AID.ISLOCALNAME),
-                    "REJECT_SWAP|" + transaction + "|инициатору обмен невыгоден");
-            triedPartners.add(partnerName);
-            clearExchange();
-            return;
-        }
-
-        log("Турист " + sender + " СОГЛАСИЛСЯ. Обмениваются: " +
-                ownGive + " -> " + sender + ", " +
-                partnerGive + " -> " + getLocalName() + ".");
-        waitingOwnLock = true;
-        AID itemAgent = findItemAgent(ownGive);
-        if (itemAgent == null) {
-            log("Не найден агент предмета " + ownGive + ". Обмен отменён.");
-            sendTo(new AID(partnerName, AID.ISLOCALNAME),
-                    "REJECT_SWAP|" + transaction + "|не найден агент предмета");
-            triedPartners.add(partnerName);
-            clearExchange();
-            return;
-        }
-        sendTo(itemAgent, "LOCK_ITEM|" + transaction);
-    }
-
-    private void handleLockOk(String content) {
-        String[] p = content.split("\\|", 3);
-        if (p.length < 3 || transaction == null || !p[1].equals(transaction)) return;
-
-        if ("INITIATOR".equals(role) && waitingOwnLock) {
-            waitingOwnLock = false;
-            waitingPartnerLock = true;
-            log("Свой предмет " + ownGive + " заблокирован. Запрашивает блокировку предмета партнёра.");
-            sendTo(new AID(partnerName, AID.ISLOCALNAME),
-                    "LOCK_PARTNER|" + transaction + "|" + ownGive + "|" + partnerGive);
-        } else if ("RECEIVER".equals(role) && waitingPartnerLock) {
-            waitingPartnerLock = false;
-            log("Свой предмет " + ownGive + " заблокирован. Сообщает инициатору о готовности.");
-            sendTo(new AID(partnerName, AID.ISLOCALNAME),
-                    "PARTNER_LOCKED|" + transaction);
-        }
-    }
-
-    private void handlePartnerLock(ACLMessage msg, String content) {
-        String[] p = content.split("\\|", 4);
-        if (p.length < 4 || !"RECEIVER".equals(role) ||
-                !p[1].equals(transaction)) return;
-
-        if (!p[3].equals(ownGive)) return;
-
-        waitingOwnLock = true;
-        AID itemAgent = findItemAgent(ownGive);
-        if (itemAgent == null) {
-            log("Не найден агент своего предмета " + ownGive +
-                    ". Не удалось подготовить обмен.");
-            sendTo(msg.getSender(), "REJECT_SWAP|" + transaction +
-                    "|не найден агент предмета");
-            clearExchange();
-            return;
-        }
-        sendTo(itemAgent, "LOCK_ITEM|" + transaction);
-    }
-
-    private void transferOwnItemToPartner() {
-        if (transaction == null || ownGive == null) return;
-
-        waitingOwnTransfer = true;
-        AID itemAgent = findItemAgent(ownGive);
-        if (itemAgent == null) {
-            log("Ошибка: не найден агент предмета " + ownGive +
-                    " при передаче владельца.");
-            return;
-        }
-        sendTo(itemAgent,
-                "TRANSFER_OWNER|" + transaction + "|" + partnerName);
-    }
-
-    private void handleOwnerChanged(String content) {
-        String[] p = content.split("\\|", 4);
-        if (p.length < 4 || transaction == null ||
-                !p[1].equals(transaction)) return;
-
-        String changedItem = p[2];
-        sendTo(findItemAgent(changedItem), "UNLOCK_ITEM|" + transaction);
-
-        if ("RECEIVER".equals(role)) {
-            myItems.remove(ownGive);
-            if (!myItems.contains(partnerGive)) myItems.add(partnerGive);
-            recalculateWeight();
-            log("Передал " + ownGive + ", получил " + partnerGive +
-                    ". Новая масса рюкзака: " + fmt(myWeight) + " кг.");
-            sendBagMass(transaction);
-            sendTo(new AID(partnerName, AID.ISLOCALNAME),
-                    "PARTNER_TRANSFER_DONE|" + transaction + "|" + changedItem);
-            waitingOwnTransfer = false;
-        } else if ("INITIATOR".equals(role)) {
-            myItems.remove(ownGive);
-            if (!myItems.contains(partnerGive)) myItems.add(partnerGive);
-            recalculateWeight();
-            log("Обмен завершён. Передал " + ownGive + ", получил " +
-                    partnerGive + ". Новая масса рюкзака: " +
-                    fmt(myWeight) + " кг.");
-            sendBagMass(transaction);
-            triedPartners.add(partnerName);
-            clearExchange();
-        }
-    }
-
-    private boolean improvesGlobal(String a, double newA, String b, double newB) {
-        double min = Double.MAX_VALUE;
-        double max = -Double.MAX_VALUE;
-
-        for (Map.Entry<String, Double> entry : allTouristWeights.entrySet()) {
-            double value = entry.getValue();
-            if (entry.getKey().equals(a)) value = newA;
-            if (entry.getKey().equals(b)) value = newB;
-            min = Math.min(min, value);
-            max = Math.max(max, value);
-        }
-        return max - min < currentDiff - 1e-9;
-    }
-
-    private void reportNoImprovement() {
-        if (reportedNoImprovement || manager == null) return;
-        reportedNoImprovement = true;
-        log("Не осталось доступных партнёров для улучшающего обмена. Сообщает менеджеру.");
-        sendTo(manager, "NO_IMPROVEMENT|" + getLocalName());
-    }
-
-    private void sendBagMass(String tx) {
-        if (manager != null) {
-            sendTo(manager, "BAG_MASS|" + tx + "|" +
-                    getLocalName() + "|" + myWeight);
-        }
-    }
-
-    private boolean busy() {
-        return pendingDistribution || waitingWeight || waitingOwnLock ||
-                waitingPartnerLock || waitingPartnerTransfer ||
-                waitingOwnTransfer || transaction != null;
-    }
-
-    private void clearExchange() {
-        transaction = null;
-        role = null;
-        partnerName = null;
-        ownGive = null;
-        partnerGive = null;
-        ownGiveWeight = 0;
-        partnerGiveWeight = 0;
-        waitingWeight = false;
-        waitingOwnLock = false;
-        waitingPartnerLock = false;
-        waitingPartnerTransfer = false;
-        waitingOwnTransfer = false;
-    }
-
-    private void resetPendingDistribution() {
-        pendingDistribution = false;
-        pendingNewItem = null;
-        pendingOldItem = null;
-        pendingNewItemAgent = null;
-    }
-
-    private void recalculateWeight() {
-        myWeight = 0;
-        for (String item : myItems) {
-            myWeight += itemWeights.getOrDefault(item, 0.0);
-        }
-    }
-
-    private String bagSignature() {
-        List<String> sorted = new ArrayList<>(myItems);
-        Collections.sort(sorted);
-        return Integer.toHexString(sorted.hashCode()) + "_" +
-                String.format(Locale.US, "%.3f", myWeight);
-    }
-
-    private void parseWeights(String value) {
-        itemWeights.clear();
-        if (value == null || value.isEmpty()) return;
-
-        for (String pair : value.split(";")) {
-            String[] kv = pair.split(":", 2);
-            if (kv.length == 2) itemWeights.put(kv[0], number(kv[1]));
-        }
-    }
-
-    private void parseTouristWeights(String value) {
-        allTouristWeights.clear();
-        if (value == null || value.isEmpty()) return;
-
-        for (String pair : value.split(";")) {
-            String[] kv = pair.split(":", 2);
-            if (kv.length == 2) allTouristWeights.put(kv[0], number(kv[1]));
-        }
-    }
-
-    private double number(String value) {
-        try {
-            return Double.parseDouble(value.replace(',', '.'));
-        } catch (Exception e) {
-            return 0;
-        }
-    }
-
-    private AID findItemAgent(String item) {
-        if (item == null) return null;
-
-        DFAgentDescription template = new DFAgentDescription();
-        ServiceDescription sd = new ServiceDescription();
-        sd.setType("item");
-        template.addServices(sd);
-
-        try {
-            for (DFAgentDescription d : DFService.search(this, template)) {
-                if (d.getName().getLocalName().equals("item_" + item)) {
-                    return d.getName();
-                }
-            }
-        } catch (FIPAException ignored) {
-        }
-        return null;
-    }
-
-    private void register() {
-        DFAgentDescription dfd = new DFAgentDescription();
-        dfd.setName(getAID());
-        ServiceDescription sd = new ServiceDescription();
-        sd.setType("tourist");
-        sd.setName("Backpack-Tourist");
-        dfd.addServices(sd);
-
-        try {
-            DFService.register(this, dfd);
-        } catch (FIPAException e) {
-            e.printStackTrace();
-        }
-
-        addBehaviour(new TickerBehaviour(this, 1000) {
-            @Override
-            protected void onTick() {
-                if (manager == null) {
-                    manager = findManager();
-                    if (manager != null) {
-                        sendTo(manager, "READY_TOURIST|" + getLocalName());
-                    }
-                }
-            }
-        });
-    }
-
-    private AID findManager() {
-        DFAgentDescription template = new DFAgentDescription();
-        ServiceDescription sd = new ServiceDescription();
-        sd.setType("manager");
-        template.addServices(sd);
-
-        try {
-            DFAgentDescription[] result = DFService.search(this, template);
-            if (result.length > 0) return result[0].getName();
-        } catch (FIPAException ignored) {
-        }
-        return null;
-    }
-
-    private void sendTo(AID to, String content) {
-        if (to == null) return;
-        ACLMessage message = new ACLMessage(ACLMessage.INFORM);
-        message.addReceiver(to);
-        message.setContent(content);
-        send(message);
-    }
-
-    private String fmt(double value) {
-        return String.format(Locale.US, "%.2f", value);
-    }
-
-    private void log(String message) {
-        System.out.printf("[%1$tT] [ТУРИСТ %2$s] %3$s%n",
-                new Date(), getLocalName(), message);
     }
 
     @Override
@@ -737,6 +109,395 @@ public class TouristAgent extends Agent {
         try {
             DFService.deregister(this);
         } catch (FIPAException ignored) {
+            // платформа уже останавливается
         }
+    }
+
+    // ------------------------------------------------------------------ диспетчер
+
+    private void handle(ACLMessage m) {
+        String type = m.getOntology();
+        if (type == null) {
+            return;
+        }
+        int perf = m.getPerformative();
+        switch (type) {
+            case Common.T_ACTIVATE:
+                capacity = Integer.parseInt(m.getContent());
+                active = true;
+                System.out.println("[" + getLocalName() + "] активирован, вместимость рюкзака "
+                        + Common.kg(capacity));
+                break;
+            case Common.T_OFFER:
+                if (perf == ACLMessage.PROPOSE) {
+                    onOffer(m);
+                }
+                break;
+            case Common.T_REVOKE:
+                if (bag.remove(m.getSender().getLocalName()) != null) {
+                    System.out.println("[" + getLocalName() + "] REVOKE: убрал "
+                            + m.getSender().getLocalName() + " из рюкзака, вес " + Common.kg(weight()));
+                }
+                break;
+            case Common.T_REQUEST_BAG:
+                balancing = false;
+                System.out.println("[" + getLocalName() + "] отчёт веса менеджеру: " + Common.kg(weight()));
+                Common.sendTo(this, ACLMessage.INFORM, Common.MANAGER, Common.T_BAG_INFO,
+                        getLocalName() + "|" + weight(), null);
+                break;
+            case Common.T_AVG:
+                onAvg(m);
+                break;
+            case Common.T_EXCH:
+                if (perf == ACLMessage.PROPOSE) {
+                    onExchPropose(m);
+                } else if (perf == ACLMessage.ACCEPT_PROPOSAL) {
+                    onExchAccept(m);
+                } else if (perf == ACLMessage.REJECT_PROPOSAL) {
+                    onExchReject(m);
+                }
+                break;
+            case Common.T_EXCH_CONFIRM:
+                onConfirm(m);
+                break;
+            case Common.T_EXCH_DONE:
+                onDone(m);
+                break;
+            case Common.T_EXCH_CANCEL:
+                onCancel(m);
+                break;
+            case Common.T_STOP:
+                stopping = true;
+                System.out.println("[" + getLocalName() + "] получена команда остановки");
+                break;
+            default:
+                break;
+        }
+    }
+
+    // ------------------------------------------------------------------ этап 1
+
+    /**
+     * Предложение предмета от ItemAgent. Принимаем, если помещается; иначе пробуем освободить
+     * место (убрать 1-3 своих предмета суммарной массой y < x так, чтобы W - y + x <= Wmax).
+     * Условие y < x гарантирует, что каждое принятие увеличивает суммарную массу в рюкзаках,
+     * поэтому первый этап не может зациклиться.
+     */
+    private void onOffer(ACLMessage m) {
+        ACLMessage reply = m.createReply();
+        String itemId = m.getSender().getLocalName();
+        String[] p = Common.split(m.getContent());
+        String name = p[0];
+        int x = Integer.parseInt(p[1]);
+
+        List<Item> release = null;
+        if (active && !balancing && !stopping && !bag.containsKey(itemId)) {
+            release = chooseRelease(x);
+        }
+        if (release == null) {
+            System.out.println("[" + getLocalName() + "] отклонил \"" + name + "\" (" + Common.kg(x)
+                    + "), вес сейчас " + Common.kg(weight()));
+            reply.setPerformative(ACLMessage.REJECT_PROPOSAL);
+            send(reply);
+            return;
+        }
+        for (Item it : release) {
+            System.out.println("[" + getLocalName() + "] освобождаю \"" + it.name + "\" (" + Common.kg(it.g)
+                    + ") чтобы взять \"" + name + "\"");
+            bag.remove(it.id);
+            Common.sendTo(this, ACLMessage.INFORM, it.id, Common.T_DROP, getLocalName(), null);
+        }
+        bag.put(itemId, new Item(itemId, name, x));
+        System.out.println("[" + getLocalName() + "] принял \"" + name + "\" (" + Common.kg(x)
+                + "), вес рюкзака " + Common.kg(weight()));
+        reply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
+        send(reply);
+    }
+
+    /** @return пустой список - помещается сразу; null - принять нельзя; иначе предметы к освобождению. */
+    private List<Item> chooseRelease(int x) {
+        int w = weight();
+        if (w + x <= capacity) {
+            return new ArrayList<>();
+        }
+        int need = w + x - capacity;   // нужно освободить минимум столько
+        List<Item> items = new ArrayList<>(bag.values());
+        int n = items.size();
+        Choice best = null;
+        for (int i = 0; i < n; i++) {
+            best = consider(best, need, x, items.get(i));
+            for (int j = i + 1; j < n; j++) {
+                best = consider(best, need, x, items.get(i), items.get(j));
+                for (int k = j + 1; k < n; k++) {
+                    best = consider(best, need, x, items.get(i), items.get(j), items.get(k));
+                }
+            }
+        }
+        return best == null ? null : best.set;
+    }
+
+    private Choice consider(Choice best, int need, int x, Item... cand) {
+        int sum = 0;
+        for (Item it : cand) {
+            sum += it.g;
+        }
+        if (sum < need || sum >= x) {
+            return best;
+        }
+        if (best == null || cand.length < best.set.size()
+                || (cand.length == best.set.size() && sum < best.sum)) {
+            Choice c = new Choice();
+            c.set = new ArrayList<>(Arrays.asList(cand));
+            c.sum = sum;
+            return c;
+        }
+        return best;
+    }
+
+    // ------------------------------------------------------------------ этап 2
+
+    private void onAvg(ACLMessage m) {
+        String[] p = Common.split(m.getContent());
+        avg = Double.parseDouble(p[0]);
+        roster = new ArrayList<>(Arrays.asList(p[1].split(",")));
+        balancing = true;
+        nextAttemptAt = System.currentTimeMillis() + 200 + rnd.nextInt(600);
+        System.out.println("[" + getLocalName() + "] мой рюкзак " + Common.kg(weight())
+                + ", средний вес " + Common.kg(avg)
+                + (weight() < avg ? " -> лёгкая группа" : weight() > avg ? " -> тяжёлая группа" : " -> вне групп"));
+    }
+
+    /** Инициатор: выбирает свой предмет и случайного партнёра. */
+    private void tryInitiate(long now) {
+        int w = weight();
+        if (roster.size() < 2 || w == avg || bag.isEmpty()) {
+            backoff(now);
+            return;
+        }
+        boolean light = w < avg;
+        Item x = null;
+        double bestD = Double.MAX_VALUE;
+        for (Item it : bag.values()) {
+            if (light) {
+                // лёгкий отдаёт самый лёгкий предмет
+                if (x == null || it.g < x.g) {
+                    x = it;
+                }
+            } else {
+                // тяжёлый отдаёт предмет, после которого вес ближе всего к среднему
+                double d = Math.abs(w - it.g - avg);
+                if (d < bestD) {
+                    bestD = d;
+                    x = it;
+                }
+            }
+        }
+        List<String> others = new ArrayList<>(roster);
+        others.remove(getLocalName());
+        if (x == null || others.isEmpty()) {
+            backoff(now);
+            return;
+        }
+        String target = others.get(rnd.nextInt(others.size()));
+
+        opId = getLocalName() + "#" + (++opSeq);
+        partner = target;
+        mine = x;
+        theirs = null;
+        role = Role.WAIT_REPLY;
+        deadline = now + WAIT_REPLY;
+        System.out.println("[" + getLocalName() + "] предлагаю обмен " + opId + " туристу " + target
+                + ": отдаю \"" + x.name + "\" (" + Common.kg(x.g) + "), группа "
+                + (light ? "LIGHT" : "HEAVY"));
+        Common.sendTo(this, ACLMessage.INFORM, x.id, Common.T_LOCK, getLocalName(), null);
+        Common.sendTo(this, ACLMessage.PROPOSE, target, Common.T_EXCH,
+                opId + "|" + (light ? "LIGHT" : "HEAVY") + "|" + x.id + "|" + x.name + "|" + x.g, opId);
+    }
+
+    /** Партнёр: сам выбирает предмет из своего рюкзака. */
+    private void onExchPropose(ACLMessage m) {
+        ACLMessage reply = m.createReply();
+        String[] p = Common.split(m.getContent());
+        String id = p[0];
+        String group = p[1];
+        Item x = new Item(p[2], p[3], Integer.parseInt(p[4]));
+        int w = weight();
+
+        boolean ok = balancing && !stopping && role == Role.NONE && !bag.isEmpty()
+                && w != avg && !bag.containsKey(x.id);
+        if (ok) {
+            String myGroup = w < avg ? "LIGHT" : "HEAVY";
+            ok = !myGroup.equals(group);   // обмен только между противоположными группами
+        }
+        Item y = null;
+        if (ok) {
+            double bestD = Double.MAX_VALUE;
+            for (Item it : bag.values()) {
+                double d = Math.abs(w - it.g + x.g - avg);
+                if (d < bestD) {
+                    bestD = d;
+                    y = it;
+                }
+            }
+            ok = y != null && (w - y.g + x.g) <= capacity;
+        }
+        if (!ok) {
+            System.out.println("[" + getLocalName() + "] отклонил обмен " + id + " от "
+                    + m.getSender().getLocalName());
+            reply.setPerformative(ACLMessage.REJECT_PROPOSAL);
+            send(reply);
+            return;
+        }
+        opId = id;
+        partner = m.getSender().getLocalName();
+        mine = y;
+        theirs = x;
+        role = Role.WAIT_CONFIRM;
+        deadline = System.currentTimeMillis() + WAIT_CONFIRM;
+        System.out.println("[" + getLocalName() + "] принял обмен " + id + ": отдаю \"" + y.name
+                + "\" (" + Common.kg(y.g) + "), получаю \"" + x.name + "\" (" + Common.kg(x.g) + ")");
+        Common.sendTo(this, ACLMessage.INFORM, y.id, Common.T_LOCK, getLocalName(), null);
+        reply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
+        reply.setContent(id + "|" + y.id + "|" + y.name + "|" + y.g);
+        send(reply);
+    }
+
+    /** Инициатор получил выбранный партнёром предмет и проверяет свою вместимость. */
+    private void onExchAccept(ACLMessage m) {
+        String[] p = Common.split(m.getContent());
+        String sender = m.getSender().getLocalName();
+        if (role != Role.WAIT_REPLY || !p[0].equals(opId) || !sender.equals(partner)) {
+            // устаревший ответ - сообщаем партнёру, чтобы он снял блокировку
+            Common.sendTo(this, ACLMessage.INFORM, sender, Common.T_EXCH_CANCEL, p[0], p[0]);
+            return;
+        }
+        Item y = new Item(p[1], p[2], Integer.parseInt(p[3]));
+        int newW = weight() - mine.g + y.g;
+        if (newW > capacity) {
+            System.out.println("[" + getLocalName() + "] обмен " + opId + " отменён: не помещается "
+                    + Common.kg(newW));
+            Common.sendTo(this, ACLMessage.INFORM, partner, Common.T_EXCH_CANCEL, opId, opId);
+            Common.sendTo(this, ACLMessage.INFORM, mine.id, Common.T_UNLOCK, getLocalName(), null);
+            clearOp();
+            backoff(System.currentTimeMillis());
+            return;
+        }
+        theirs = y;
+        role = Role.WAIT_DONE;
+        deadline = System.currentTimeMillis() + WAIT_DONE;
+        System.out.println("[" + getLocalName() + "] подтверждаю обмен " + opId + " с " + partner);
+        Common.sendTo(this, ACLMessage.INFORM, partner, Common.T_EXCH_CONFIRM, opId, opId);
+    }
+
+    private void onExchReject(ACLMessage m) {
+        String conv = m.getConversationId();
+        if (role == Role.WAIT_REPLY && opId != null && opId.equals(conv)) {
+            System.out.println("[" + getLocalName() + "] обмен " + opId + " отклонён партнёром");
+            Common.sendTo(this, ACLMessage.INFORM, mine.id, Common.T_UNLOCK, getLocalName(), null);
+            clearOp();
+            backoff(System.currentTimeMillis());
+        }
+    }
+
+    /** Партнёр: инициатор подтвердил - выполняем свою часть обмена. */
+    private void onConfirm(ACLMessage m) {
+        String id = m.getContent();
+        String sender = m.getSender().getLocalName();
+        if (role != Role.WAIT_CONFIRM || !id.equals(opId) || !sender.equals(partner)) {
+            Common.sendTo(this, ACLMessage.INFORM, sender, Common.T_EXCH_CANCEL, id, id);
+            return;
+        }
+        System.out.println("[" + getLocalName() + "] обмен " + opId + " с " + partner + ": отдал \""
+                + mine.name + "\" (" + Common.kg(mine.g) + "), получил \"" + theirs.name + "\" ("
+                + Common.kg(theirs.g) + ")");
+        applyExchange();
+        Common.sendTo(this, ACLMessage.INFORM, partner, Common.T_EXCH_DONE, opId, opId);
+        reportWeight();
+        clearOp();
+        backoff(System.currentTimeMillis());
+    }
+
+    /** Инициатор: партнёр выполнил обмен - выполняем свою часть. */
+    private void onDone(ACLMessage m) {
+        String id = m.getContent();
+        if (role != Role.WAIT_DONE || !id.equals(opId)) {
+            return;
+        }
+        System.out.println("[" + getLocalName() + "] обмен " + opId + " с " + partner + ": отдал \""
+                + mine.name + "\" (" + Common.kg(mine.g) + "), получил \"" + theirs.name + "\" ("
+                + Common.kg(theirs.g) + ")");
+        applyExchange();
+        reportWeight();
+        clearOp();
+        backoff(System.currentTimeMillis());
+    }
+
+    private void onCancel(ACLMessage m) {
+        String id = m.getContent();
+        if (role != Role.NONE && id != null && id.equals(opId)) {
+            Common.sendTo(this, ACLMessage.INFORM, mine.id, Common.T_UNLOCK, getLocalName(), null);
+            clearOp();
+            backoff(System.currentTimeMillis());
+        }
+    }
+
+    private void checkTimeout(long now) {
+        if (role == Role.NONE || now <= deadline) {
+            return;
+        }
+        if (role == Role.WAIT_REPLY || role == Role.WAIT_DONE) {
+            Common.sendTo(this, ACLMessage.INFORM, partner, Common.T_EXCH_CANCEL, opId, opId);
+        }
+        Common.sendTo(this, ACLMessage.INFORM, mine.id, Common.T_UNLOCK, getLocalName(), null);
+        clearOp();
+        backoff(now);
+    }
+
+    /** Меняем содержимое рюкзака и передаём свой предмет новому владельцу. */
+    private void applyExchange() {
+        Common.sendTo(this, ACLMessage.INFORM, mine.id, Common.T_TRANSFER, partner, null);
+        bag.remove(mine.id);
+        bag.put(theirs.id, theirs);
+    }
+
+    private void reportWeight() {
+        Common.sendTo(this, ACLMessage.INFORM, Common.MANAGER, Common.T_BAG_UPDATE,
+                opId + "|" + getLocalName() + "|" + weight(), null);
+    }
+
+    private void sendFinal() {
+        finalSent = true;
+        StringBuilder sb = new StringBuilder();
+        for (Item it : bag.values()) {
+            if (sb.length() > 0) {
+                sb.append(';');
+            }
+            sb.append(it.name).append('=').append(it.g);
+        }
+        Common.sendTo(this, ACLMessage.INFORM, Common.MANAGER, Common.T_FINAL,
+                getLocalName() + "|" + weight() + "|" + sb, null);
+        System.out.println("[" + getLocalName() + "] итоговый вес рюкзака " + Common.kg(weight()));
+    }
+
+    // ------------------------------------------------------------------ утилиты
+
+    private int weight() {
+        int s = 0;
+        for (Item it : bag.values()) {
+            s += it.g;
+        }
+        return s;
+    }
+
+    private void clearOp() {
+        role = Role.NONE;
+        opId = null;
+        partner = null;
+        mine = null;
+        theirs = null;
+    }
+
+    private void backoff(long now) {
+        nextAttemptAt = now + 100 + rnd.nextInt(400);
     }
 }

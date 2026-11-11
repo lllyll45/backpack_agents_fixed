@@ -1,469 +1,485 @@
 package agents;
 
+import jade.content.lang.Codec;
+import jade.content.lang.sl.SLCodec;
+import jade.content.onto.Ontology;
+import jade.content.onto.basic.Action;
 import jade.core.AID;
 import jade.core.Agent;
 import jade.core.behaviours.CyclicBehaviour;
-import jade.domain.DFService;
-import jade.domain.FIPAAgentManagement.DFAgentDescription;
-import jade.domain.FIPAAgentManagement.ServiceDescription;
-import jade.domain.FIPAException;
+import jade.core.behaviours.WakerBehaviour;
+import jade.domain.JADEAgentManagement.JADEManagementOntology;
+import jade.domain.JADEAgentManagement.ShutdownPlatform;
 import jade.lang.acl.ACLMessage;
 
-import java.io.*;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
+/**
+ * Менеджер. Не распределяет предметы и не выбирает пары для обмена:
+ * только считает предметы, собирает веса, считает среднее/разброс и решает, когда остановиться.
+ */
 public class ManagerAgent extends Agent {
-    private int expectedTourists = 2;
-    private double capacity = 12.0;
 
-    private final Map<String, Double> itemWeights = new LinkedHashMap<>();
-    private final Map<String, String> itemOwners = new LinkedHashMap<>();
-    private final Map<String, AID> itemAgents = new HashMap<>();
-    private final Map<String, AID> tourists = new LinkedHashMap<>();
-    private final Map<String, Double> touristWeights = new LinkedHashMap<>();
+    private enum Phase {REGISTRATION, WAIT_TOURISTS, DISTRIBUTION, COLLECT_BAGS, BALANCING, FINISHING, DONE}
 
-    private final Set<String> readyItems = new HashSet<>();
-    private final Set<String> noImprovement = new HashSet<>();
-    private final Map<String, Map<String, Double>> transactionReports = new HashMap<>();
-    private final Map<String, Double> initialReports = new HashMap<>();
-    private final Deque<String> distributionQueue = new ArrayDeque<>();
-    private final Set<String> triedTouristsForCurrentItem = new HashSet<>();
-    private String currentDistributionItem;
+    /** Тишина после последней регистрации предмета, после которой регистрация считается завершённой. */
+    private static final long REG_SILENCE = 5000;
+    /** Сколько ждать, если N_owned не меняется, прежде чем признать первый этап невыполнимым. */
+    private static final long STAGE1_STALL = 30000;
+    /** Сколько N_owned должно держаться равным N_total, чтобы исключить гонку уведомлений. */
+    private static final long STABLE = 2000;
+    /** Если за это время не завершилось ни одного обмена - останавливаемся. */
+    private static final long IDLE_STOP = 20000;
+    private static final long FINAL_WAIT = 30000;
 
-    private boolean distributionStarted;
-    private boolean optimizationStarted;
-    private boolean stopped;
-    private int epoch;
+    private int expected;
+    private int capacity;
+    private String resultPath;
+
+    private Phase phase = Phase.REGISTRATION;
+
+    // ---- этап 1: учёт предметов (только состояние "есть владелец / нет")
+    private final Map<String, Boolean> items = new LinkedHashMap<>();
+    private int nOwned;
+    private long lastReg;
+    private long lastProgress;
+    private long stableSince;
+    private long lastDfCheck;
+    private long lastPrint;
+    private int lastDfCount = -1;
+
+    // ---- этап 2
+    private List<AID> tourists = new ArrayList<>();
+    private final Map<String, Integer> bags = new TreeMap<>();
+    private final Map<String, Integer> initialBags = new TreeMap<>();
+    private final Map<String, Map<String, Integer>> pendingOps = new LinkedHashMap<>();
+    private final List<String> exchangeLog = new ArrayList<>();
+    private double avg;
+    private int f0;
+    private int fBest;
+    private int noImprove;   // счётчик C
+    private int cMax;
+    private int completed;
+    private long lastExchange;
+
+    // ---- завершение
+    private final Map<String, String[]> finals = new TreeMap<>();
+    private String stopReason = "";
+    private long finishStart;
 
     @Override
     protected void setup() {
-        Object[] args = getArguments();
+        Object[] a = getArguments();
+        expected = Integer.parseInt(a[0].toString());
+        capacity = Integer.parseInt(a[1].toString());
+        resultPath = a[2].toString();
+        lastReg = System.currentTimeMillis();
 
-        if (args != null && args.length > 0) {
-            try {
-                expectedTourists = Integer.parseInt(args[0].toString());
-            } catch (Exception ignored) {
-            }
-        }
-        if (args != null && args.length > 1) {
-            try {
-                capacity = Double.parseDouble(args[1].toString().replace(',', '.'));
-            } catch (Exception ignored) {
-            }
-        }
-
-        loadItems();
-        register();
+        System.out.println("[manager] запущен. Ожидается туристов: " + expected
+                + ", вместимость рюкзака: " + Common.kg(capacity));
 
         addBehaviour(new CyclicBehaviour(this) {
             @Override
             public void action() {
-                ACLMessage msg = receive();
-                if (msg == null) {
-                    block();
-                    return;
+                ACLMessage m;
+                while ((m = myAgent.receive()) != null) {
+                    ManagerAgent.this.handle(m);
                 }
-                ManagerAgent.this.handle(msg);
+                step(System.currentTimeMillis());
+                block(100);
             }
         });
-
-        log("Запущен. Ожидается туристов: " + expectedTourists +
-                ", вместимость рюкзака: " + fmt(capacity) + " кг.");
     }
 
-    private void handle(ACLMessage msg) {
-        String content = msg.getContent() == null ? "" : msg.getContent();
-        String sender = msg.getSender().getLocalName();
+    // ------------------------------------------------------------------ сообщения
 
-        if (content.startsWith("READY_ITEM|")) {
-            String[] p = content.split("\\|", 3);
-            if (p.length == 3) {
-                itemWeights.put(p[1], number(p[2]));
-                itemOwners.putIfAbsent(p[1], null);
-                itemAgents.put(p[1], msg.getSender());
-                if (readyItems.add(p[1])) {
-                    log("Зарегистрирован предмет " + p[1] +
-                            ", масса " + fmt(number(p[2])) + " кг. Всего: " +
-                            readyItems.size() + "/" + itemWeights.size());
+    private void handle(ACLMessage m) {
+        String type = m.getOntology();
+        if (type == null) {
+            return;
+        }
+        String sender = m.getSender().getLocalName();
+        long now = System.currentTimeMillis();
+
+        switch (type) {
+            case Common.T_REGISTER:
+                if (phase == Phase.REGISTRATION) {
+                    if (!items.containsKey(sender)) {   // учитываем только уникальные сообщения
+                        items.put(sender, Boolean.FALSE);
+                        lastReg = now;                  // сброс таймера ожидания
+                        System.out.println("[manager] регистрация предмета " + sender
+                                + " (всего " + items.size() + ")");
+                    }
+                } else if (!items.containsKey(sender)) {
+                    System.out.println("[manager] поздняя регистрация " + sender + " → LATE");
+                    Common.sendTo(this, ACLMessage.REFUSE, sender, Common.T_LATE, "регистрация закрыта", null);
                 }
-            }
-            tryStartDistribution();
-        } else if (content.startsWith("READY_TOURIST|")) {
-            if (!tourists.containsKey(sender)) {
-                tourists.put(sender, msg.getSender());
-                touristWeights.put(sender, 0.0);
-                log("Зарегистрирован турист " + sender + ". Всего: " +
-                        tourists.size() + "/" + expectedTourists);
-            }
-            tryStartDistribution();
-        } else if (content.startsWith("ITEM_OWNED|")) {
-            String[] p = content.split("\\|", 3);
-            if (p.length == 3 && itemOwners.containsKey(p[1])) {
-                itemOwners.put(p[1], p[2]);
-                log("Предмет " + p[1] + " теперь принадлежит туристу " + p[2]);
-            }
-            if (p.length == 3 && p[1].equals(currentDistributionItem)) {
-                currentDistributionItem = null;
-                triedTouristsForCurrentItem.clear();
-                if (!distributionQueue.isEmpty() && distributionQueue.peekFirst().equals(p[1])) {
-                    distributionQueue.removeFirst();
+                break;
+
+            case Common.T_OWNER: {
+                Boolean prev = items.get(sender);
+                if (prev == null) {
+                    break;
                 }
-                startNextDistributionItem();
+                boolean owned = "OWNED".equals(m.getContent());
+                if (prev != owned) {                    // повторные/устаревшие уведомления не меняют счётчик
+                    items.put(sender, owned);
+                    nOwned += owned ? 1 : -1;
+                    lastProgress = now;
+                    System.out.println("[manager] " + sender + " → " + (owned ? "OWNED" : "NOT_OWNED")
+                            + " (N_owned=" + nOwned + "/" + items.size() + ")");
+                }
+                break;
             }
-            checkDistributionComplete();
-        } else if (content.startsWith("ITEM_UNOWNED|")) {
-            String[] p = content.split("\\|", 2);
-            if (p.length == 2 && itemOwners.containsKey(p[1])) {
-                itemOwners.put(p[1], null);
-                log("Предмет " + p[1] + " временно остался без владельца.");
-                if (!distributionQueue.contains(p[1])) distributionQueue.addLast(p[1]);
-                if (currentDistributionItem == null) startNextDistributionItem();
-            }
-        } else if (content.startsWith("REJECT_ITEM|")) {
-            String[] p = content.split("\\|", 3);
-            if (p.length >= 2 && p[1].equals(currentDistributionItem)) {
-                triedTouristsForCurrentItem.add(sender);
-                log("Турист " + sender + " не смог принять " + p[1] + ". Ищу следующего туриста.");
-                offerCurrentItemToNextTourist();
-            }
-        } else if (content.startsWith("BAG_MASS|")) {
-            String[] p = content.split("\\|", 4);
-            if (p.length >= 4) {
-                handleBagMass(p[1], p[2], number(p[3]));
-            }
-        } else if (content.startsWith("NO_IMPROVEMENT|")) {
-            noImprovement.add(sender);
-            log("Турист " + sender + " сообщил, что не нашёл улучшающих обменов. " +
-                    "Отметили " + noImprovement.size() + "/" + tourists.size());
-            if (optimizationStarted && noImprovement.containsAll(tourists.keySet())) {
-                stopSystem("все туристы исчерпали варианты улучшающих обменов");
-            }
+
+            case Common.T_BAG_INFO:
+                if (phase == Phase.COLLECT_BAGS) {
+                    String[] p = Common.split(m.getContent());
+                    bags.put(p[0], Integer.parseInt(p[1]));
+                    System.out.println("[manager] вес рюкзака " + p[0] + ": " + Common.kg(Integer.parseInt(p[1]))
+                            + " (" + bags.size() + "/" + tourists.size() + ")");
+                }
+                break;
+
+            case Common.T_BAG_UPDATE:
+                if (phase == Phase.BALANCING || phase == Phase.FINISHING) {
+                    onBagUpdate(m.getContent(), now);
+                }
+                break;
+
+            case Common.T_FINAL:
+                if (phase == Phase.FINISHING) {
+                    String[] p = Common.split(m.getContent());
+                    finals.put(p[0], p);
+                    System.out.println("[manager] итоговые данные от " + p[0]
+                            + " (" + finals.size() + "/" + tourists.size() + ")");
+                }
+                break;
+
+            default:
+                break;
         }
     }
 
-    private void tryStartDistribution() {
-        if (distributionStarted || stopped) return;
+    // ------------------------------------------------------------------ конечный автомат
 
-        if (tourists.size() < expectedTourists ||
-                itemWeights.isEmpty() ||
-                readyItems.size() < itemWeights.size()) {
-            return;
-        }
+    private void step(long now) {
+        switch (phase) {
+            case REGISTRATION:
+                if (!items.isEmpty() && now - lastReg > REG_SILENCE) {
+                    System.out.println("[manager] регистрация предметов завершена, N_total = " + items.size());
+                    phase = Phase.WAIT_TOURISTS;
+                }
+                break;
 
-        distributionStarted = true;
-
-        String config = "DISTRIBUTION_CONFIG|" + capacity + "|" + serializeWeights();
-        for (AID tourist : tourists.values()) {
-            sendTo(tourist, config);
-        }
-        distributionQueue.clear();
-        distributionQueue.addAll(itemWeights.keySet());
-        log("Все агенты зарегистрированы. Менеджер запускает последовательную раздачу предметов.");
-        startNextDistributionItem();
-    }
-
-    private void startNextDistributionItem() {
-        if (!distributionStarted || optimizationStarted || stopped || currentDistributionItem != null) return;
-
-        while (!distributionQueue.isEmpty() && itemOwners.get(distributionQueue.peekFirst()) != null) {
-            distributionQueue.removeFirst();
-        }
-        if (distributionQueue.isEmpty()) {
-            checkDistributionComplete();
-            return;
-        }
-
-        currentDistributionItem = distributionQueue.peekFirst();
-        triedTouristsForCurrentItem.clear();
-        offerCurrentItemToNextTourist();
-    }
-
-    private void offerCurrentItemToNextTourist() {
-        if (currentDistributionItem == null || optimizationStarted || stopped) return;
-
-        String selected = null;
-        double minWeight = Double.MAX_VALUE;
-        for (String tourist : tourists.keySet()) {
-            if (triedTouristsForCurrentItem.contains(tourist)) continue;
-            double weight = calculateWeight(tourist);
-            if (weight < minWeight) {
-                minWeight = weight;
-                selected = tourist;
-            }
-        }
-
-        if (selected == null) {
-            log("Ни один турист не смог принять предмет " + currentDistributionItem +
-                    ". Распределение остановлено: проверьте вместимость рюкзаков и веса предметов.");
-            stopSystem("невозможно распределить предмет " + currentDistributionItem);
-            return;
-        }
-
-        AID itemAgent = itemAgents.get(currentDistributionItem);
-        sendTo(tourists.get(selected), "OFFER_ITEM|" + currentDistributionItem + "|" +
-                itemWeights.get(currentDistributionItem) + "|" +
-                (itemAgent == null ? "" : itemAgent.getLocalName()));
-        log("Предлагает предмет " + currentDistributionItem + " туристу " + selected +
-                " (текущая масса " + fmt(minWeight) + " кг).");
-    }
-
-    private void checkDistributionComplete() {
-        if (!distributionStarted || optimizationStarted || itemOwners.isEmpty()) return;
-
-        for (String owner : itemOwners.values()) {
-            if (owner == null) return;
-        }
-
-        optimizationStarted = true;
-        touristWeights.clear();
-
-        for (String tourist : tourists.keySet()) {
-            touristWeights.put(tourist, calculateWeight(tourist));
-        }
-
-        for (Map.Entry<String, AID> entry : tourists.entrySet()) {
-            sendTo(entry.getValue(),
-                    "DISTRIBUTION_COMPLETE|" + serializeItemsFor(entry.getKey()));
-        }
-
-        log("Все предметы получили владельцев. Первый этап завершён.");
-        log("Начинается второй этап — оптимизация распределения.");
-        writeResult("начальное распределение");
-    }
-
-    private void handleBagMass(String transaction, String tourist, double weight) {
-        if (!tourists.containsKey(tourist)) return;
-
-        if ("INIT".equals(transaction)) {
-            initialReports.put(tourist, weight);
-            log("Получена начальная масса от " + tourist + ": " + fmt(weight) + " кг. " +
-                    "Отчётов: " + initialReports.size() + "/" + tourists.size());
-
-            if (initialReports.keySet().containsAll(tourists.keySet())) {
-                touristWeights.putAll(initialReports);
-                initialReports.clear();
-                log("Получены начальные массы всех туристов.");
-                broadcastState();
-            }
-            return;
-        }
-
-        Map<String, Double> reports =
-                transactionReports.computeIfAbsent(transaction, key -> new LinkedHashMap<>());
-        reports.put(tourist, weight);
-
-        log("Получена новая масса от " + tourist + ": " + fmt(weight) +
-                " кг. Транзакция " + transaction +
-                ". Отчётов по обмену: " + reports.size() + "/2");
-
-        // Каждый успешный обмен выполняют ровно два туриста.
-        if (reports.size() >= 2) {
-            touristWeights.putAll(reports);
-            transactionReports.remove(transaction);
-            log("Оба участника обмена передали новые массы. Пересчитываю общее состояние.");
-            broadcastState();
-        }
-    }
-
-    private void broadcastState() {
-        epoch++;
-        noImprovement.clear();
-
-        double avg = average();
-        double diff = spread();
-
-        String state = "GLOBAL_STATE|" + avg + "|" + diff + "|" +
-                serializeTouristWeights() + "|" + epoch;
-
-        for (AID tourist : tourists.values()) {
-            sendTo(tourist, state);
-        }
-
-        log("Состояние после раунда " + epoch + ": средняя масса " +
-                fmt(avg) + " кг, общий разброс " + fmt(diff) + " кг.");
-
-        for (Map.Entry<String, Double> entry : touristWeights.entrySet()) {
-            log(entry.getKey() + ": " + fmt(entry.getValue()) + " кг.");
-        }
-
-        writeResult("после оптимизации, раунд " + epoch);
-
-        if (diff < 0.000001) {
-            stopSystem("достигнуто равенство масс");
-        }
-    }
-
-    private double calculateWeight(String tourist) {
-        double sum = 0;
-        for (Map.Entry<String, String> entry : itemOwners.entrySet()) {
-            if (tourist.equals(entry.getValue())) {
-                sum += itemWeights.getOrDefault(entry.getKey(), 0.0);
-            }
-        }
-        return sum;
-    }
-
-    private double average() {
-        if (touristWeights.isEmpty()) return 0;
-        double sum = 0;
-        for (double weight : touristWeights.values()) sum += weight;
-        return sum / touristWeights.size();
-    }
-
-    private double spread() {
-        if (touristWeights.isEmpty()) return 0;
-
-        double min = Double.MAX_VALUE;
-        double max = -Double.MAX_VALUE;
-
-        for (double weight : touristWeights.values()) {
-            min = Math.min(min, weight);
-            max = Math.max(max, weight);
-        }
-        return max - min;
-    }
-
-    private String serializeItemsFor(String tourist) {
-        List<String> list = new ArrayList<>();
-        for (Map.Entry<String, String> entry : itemOwners.entrySet()) {
-            if (tourist.equals(entry.getValue())) list.add(entry.getKey());
-        }
-        return list.isEmpty() ? "-" : String.join(";", list);
-    }
-
-    private String serializeWeights() {
-        StringJoiner joiner = new StringJoiner(";");
-        for (Map.Entry<String, Double> entry : itemWeights.entrySet()) {
-            joiner.add(entry.getKey() + ":" + entry.getValue());
-        }
-        return joiner.toString();
-    }
-
-    private String serializeTouristWeights() {
-        StringJoiner joiner = new StringJoiner(";");
-        for (Map.Entry<String, Double> entry : touristWeights.entrySet()) {
-            joiner.add(entry.getKey() + ":" + entry.getValue());
-        }
-        return joiner.toString();
-    }
-
-    private void stopSystem(String reason) {
-        if (stopped) return;
-        stopped = true;
-
-        for (AID tourist : tourists.values()) {
-            sendTo(tourist, "STOP|" + reason);
-        }
-
-        writeResult(reason);
-        log("Работа завершена: " + reason);
-    }
-
-    private void writeResult(String reason) {
-        File directory = new File("result");
-        if (!directory.exists()) directory.mkdirs();
-
-        try (PrintWriter writer = new PrintWriter(new OutputStreamWriter(
-                new FileOutputStream("result/result.txt"), StandardCharsets.UTF_8))) {
-
-            writer.println("=== Распределение туристического снаряжения ===");
-            writer.println("Состояние: " + reason);
-            writer.println();
-
-            for (String tourist : tourists.keySet()) {
-                writer.printf(Locale.US, "%s: %.2f кг%n",
-                        tourist, calculateWeight(tourist));
-
-                for (Map.Entry<String, String> entry : itemOwners.entrySet()) {
-                    if (tourist.equals(entry.getValue())) {
-                        writer.printf(Locale.US, "  - %s (%.2f кг)%n",
-                                entry.getKey(), itemWeights.get(entry.getKey()));
+            case WAIT_TOURISTS:
+                if (now - lastDfCheck >= 1000) {
+                    lastDfCheck = now;
+                    List<AID> found = Common.findTourists(this);
+                    if (found.size() != lastDfCount) {
+                        lastDfCount = found.size();
+                        System.out.println("[manager] подключено туристов: " + found.size() + " из " + expected);
+                    }
+                    if (found.size() >= expected) {
+                        tourists = new ArrayList<>(found.subList(0, expected));
+                        startDistribution(now);
                     }
                 }
-                writer.println();
-            }
+                break;
 
-            writer.printf(Locale.US, "Средняя масса: %.2f кг%nРазброс: %.2f кг%n",
-                    average(), spread());
+            case DISTRIBUTION:
+                stepDistribution(now);
+                break;
 
-        } catch (IOException e) {
-            log("Не удалось записать result/result.txt: " + e.getMessage());
+            case COLLECT_BAGS:
+                if (bags.size() >= tourists.size()) {
+                    startBalancing(now);
+                }
+                break;
+
+            case BALANCING:
+                if (now - lastExchange > IDLE_STOP) {
+                    beginStop("обмены больше не происходят (нет подходящих пар за "
+                            + IDLE_STOP / 1000 + " с)", now);
+                }
+                break;
+
+            case FINISHING:
+                if (finals.size() >= tourists.size() || now - finishStart > FINAL_WAIT) {
+                    finish();
+                }
+                break;
+
+            default:
+                break;
         }
     }
 
-    private void loadItems() {
-        File file = new File("data/items.txt");
-        if (!file.exists()) {
-            log("Не найден файл data/items.txt");
-            return;
+    private void startDistribution(long now) {
+        System.out.println("[manager] все туристы подключены. Начинается первоначальное распределение");
+        for (AID t : tourists) {
+            Common.send(this, ACLMessage.INFORM, t, Common.T_ACTIVATE, String.valueOf(capacity));
         }
+        for (String itemId : items.keySet()) {
+            Common.sendTo(this, ACLMessage.INFORM, itemId, Common.T_START, "", null);
+        }
+        phase = Phase.DISTRIBUTION;
+        lastProgress = now;
+        stableSince = 0;
+    }
 
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                new FileInputStream(file), StandardCharsets.UTF_8))) {
-
-            String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty() || line.startsWith("#")) continue;
-
-                String[] p = line.split("\\s+", 2);
-                if (p.length == 2) {
-                    itemWeights.put(p[1], number(p[0]));
+    private void stepDistribution(long now) {
+        int total = items.size();
+        if (now - lastPrint > 3000) {
+            lastPrint = now;
+            System.out.println("[manager] распределено предметов: " + nOwned + " из " + total);
+        }
+        if (nOwned == total) {
+            if (stableSince == 0) {
+                stableSince = now;
+            } else if (now - stableSince >= STABLE) {
+                System.out.println("[manager] N_owned = N_total = " + total + ": первый этап завершён");
+                phase = Phase.COLLECT_BAGS;
+                bags.clear();
+                for (AID t : tourists) {
+                    Common.send(this, ACLMessage.INFORM, t, Common.T_REQUEST_BAG, "");
                 }
             }
-
-            log("Из файла загружено предметов: " + itemWeights.size());
-        } catch (Exception e) {
-            log("Ошибка чтения файла предметов: " + e.getMessage());
+        } else {
+            stableSince = 0;
+            if (now - lastProgress > STAGE1_STALL) {
+                beginStop("не удалось разместить все предметы: распределено " + nOwned + " из " + total
+                        + " (суммарная масса не помещается в рюкзаки с учётом вместимости)", now);
+            }
         }
     }
 
-    private void register() {
-        DFAgentDescription dfd = new DFAgentDescription();
-        dfd.setName(getAID());
+    private void startBalancing(long now) {
+        initialBags.putAll(bags);
+        long sum = 0;
+        for (int w : bags.values()) {
+            sum += w;
+        }
+        avg = sum / (double) bags.size();
+        f0 = spread();
+        fBest = f0;
+        noImprove = 0;
+        cMax = (int) Math.ceil(Math.sqrt((double) tourists.size() * items.size()));
+        lastExchange = now;
 
-        ServiceDescription sd = new ServiceDescription();
-        sd.setType("manager");
-        sd.setName("Backpack-Manager");
-        dfd.addServices(sd);
+        StringBuilder roster = new StringBuilder();
+        for (AID t : tourists) {
+            if (roster.length() > 0) {
+                roster.append(',');
+            }
+            roster.append(t.getLocalName());
+        }
+        System.out.println("[manager] второй этап. W_avg = " + Common.kg(avg) + ", F0 = " + Common.kg(f0)
+                + ", C_max = " + cMax);
+        phase = Phase.BALANCING;
+        for (AID t : tourists) {
+            Common.send(this, ACLMessage.INFORM, t, Common.T_AVG, avg + "|" + roster);
+        }
+        if (f0 == 0) {
+            beginStop("рюкзаки уже одинаковы по весу", now);
+        }
+    }
 
+    /** Менеджер ждёт отчёты обоих участников одной операции и только потом пересчитывает статистику. */
+    private void onBagUpdate(String content, long now) {
+        String[] p = Common.split(content);
+        String op = p[0];
+        Map<String, Integer> parts = pendingOps.computeIfAbsent(op, k -> new LinkedHashMap<>());
+        parts.put(p[1], Integer.parseInt(p[2]));
+        if (parts.size() < 2) {
+            return;
+        }
+        pendingOps.remove(op);
+        bags.putAll(parts);
+        completed++;
+        lastExchange = now;
+
+        int f = spread();
+        if (f < fBest) {
+            fBest = f;
+            noImprove = 0;
+        } else {
+            noImprove++;
+        }
+        StringBuilder who = new StringBuilder();
+        for (Map.Entry<String, Integer> e : parts.entrySet()) {
+            if (who.length() > 0) {
+                who.append(" <-> ");
+            }
+            who.append(e.getKey()).append(" (").append(Common.kg(e.getValue())).append(")");
+        }
+        exchangeLog.add(String.format("%4d | %-60s | %-9s | %-9s | %d",
+                completed, who, Common.kg(f), Common.kg(fBest), noImprove));
+        System.out.println("[manager] обмен №" + completed + ": F = " + Common.kg(f) + ", F_best = "
+                + Common.kg(fBest) + ", C = " + noImprove + "/" + cMax);
+
+        if (phase == Phase.BALANCING) {
+            if (f == 0) {
+                beginStop("достигнут идеальный баланс (F = 0)", now);
+            } else if (noImprove >= cMax) {
+                beginStop("достигнут предел обменов без улучшения C_max = " + cMax, now);
+            }
+        }
+    }
+
+    private int spread() {
+        int min = Integer.MAX_VALUE;
+        int max = Integer.MIN_VALUE;
+        for (int w : bags.values()) {
+            min = Math.min(min, w);
+            max = Math.max(max, w);
+        }
+        return bags.isEmpty() ? 0 : max - min;
+    }
+
+    private void beginStop(String reason, long now) {
+        System.out.println("[manager] остановка: " + reason);
+        stopReason = reason;
+        phase = Phase.FINISHING;
+        finishStart = now;
+        for (AID t : tourists) {
+            Common.send(this, ACLMessage.INFORM, t, Common.T_STOP, "");
+        }
+    }
+
+    // ------------------------------------------------------------------ итоги
+
+    private void finish() {
+        List<String> report = buildReport();
         try {
-            DFService.register(this, dfd);
-        } catch (FIPAException e) {
-            e.printStackTrace();
+            Path path = Paths.get(resultPath);
+            if (path.getParent() != null) {
+                Files.createDirectories(path.getParent());
+            }
+            Files.write(path, report, StandardCharsets.UTF_8);
+            System.out.println("[manager] результат записан в файл: " + path.toAbsolutePath());
+        } catch (IOException e) {
+            System.out.println("[manager] не удалось записать файл результата: " + e);
+            for (String line : report) {
+                System.out.println(line);
+            }
         }
+        phase = Phase.DONE;
+        shutdownPlatformLater();
     }
 
-    private double number(String value) {
-        try {
-            return Double.parseDouble(value.replace(',', '.'));
-        } catch (Exception e) {
-            return 0;
+    private List<String> buildReport() {
+        String line = "========================================================================";
+        String thin = "------------------------------------------------------------------------";
+        List<String> r = new ArrayList<>();
+        r.add(line);
+        r.add(" РАСПРЕДЕЛЕНИЕ ПРЕДМЕТОВ МЕЖДУ ТУРИСТАМИ - РЕЗУЛЬТАТ");
+        r.add(line);
+        r.add("Дата и время:           " + new SimpleDateFormat("dd.MM.yyyy HH:mm:ss").format(new Date()));
+        r.add("Туристов (N):           " + tourists.size());
+        r.add("Предметов (M):          " + items.size());
+        r.add("Вместимость рюкзака:    " + Common.kg(capacity));
+        r.add("C_max = ceil(sqrt(N*M)): " + (cMax > 0 ? String.valueOf(cMax) : "-"));
+        r.add("Причина остановки:      " + stopReason);
+        r.add("");
+
+        r.add("1. РАСПРЕДЕЛЕНИЕ ПОСЛЕ ПЕРВОГО ЭТАПА");
+        r.add(thin);
+        if (initialBags.isEmpty()) {
+            r.add("(первый этап не завершён)");
+        } else {
+            for (Map.Entry<String, Integer> e : initialBags.entrySet()) {
+                r.add(String.format("%-40s %12s", e.getKey(), Common.kg(e.getValue())));
+            }
+            r.add(thin);
+            r.add("Средний вес W_avg: " + Common.kg(avg) + ",  начальный разброс F0: " + Common.kg(f0));
         }
-    }
+        r.add("");
 
-    private String fmt(double value) {
-        return String.format(Locale.US, "%.2f", value);
-    }
-
-    private void log(String message) {
-        System.out.printf("[%1$tT] [МЕНЕДЖЕР] %2$s%n", new Date(), message);
-    }
-
-    private void sendTo(AID to, String content) {
-        if (to == null) return;
-        ACLMessage message = new ACLMessage(ACLMessage.INFORM);
-        message.addReceiver(to);
-        message.setContent(content);
-        send(message);
-    }
-
-    @Override
-    protected void takeDown() {
-        try {
-            DFService.deregister(this);
-        } catch (FIPAException ignored) {
+        r.add("2. ЖУРНАЛ ОБМЕНОВ");
+        r.add(thin);
+        if (exchangeLog.isEmpty()) {
+            r.add("(обменов не было)");
+        } else {
+            r.add(String.format("%4s | %-60s | %-9s | %-9s | %s", "№", "Участники (вес после обмена)",
+                    "F", "F_best", "C"));
+            r.addAll(exchangeLog);
         }
+        r.add("");
+
+        r.add("3. ИТОГОВОЕ СОДЕРЖИМОЕ РЮКЗАКОВ");
+        r.add(thin);
+        int min = Integer.MAX_VALUE;
+        int max = Integer.MIN_VALUE;
+        long sum = 0;
+        for (AID t : tourists) {
+            String[] p = finals.get(t.getLocalName());
+            if (p == null) {
+                r.add(t.getLocalName() + ": итоговые данные не получены");
+                continue;
+            }
+            int w = Integer.parseInt(p[1]);
+            min = Math.min(min, w);
+            max = Math.max(max, w);
+            sum += w;
+            r.add(t.getLocalName() + "  -  " + Common.kg(w));
+            if (p.length > 2 && !p[2].isEmpty()) {
+                for (String it : p[2].split(";")) {
+                    int eq = it.lastIndexOf('=');
+                    r.add("      * " + it.substring(0, eq) + " (" + Common.kg(Integer.parseInt(it.substring(eq + 1))) + ")");
+                }
+            } else {
+                r.add("      (рюкзак пуст)");
+            }
+        }
+        r.add("");
+
+        r.add("4. ИТОГОВЫЕ ПОКАЗАТЕЛИ");
+        r.add(thin);
+        if (!finals.isEmpty() && min != Integer.MAX_VALUE) {
+            r.add("Средний вес рюкзака:            " + Common.kg(sum / (double) finals.size()));
+            r.add("Минимальный вес:                " + Common.kg(min));
+            r.add("Максимальный вес:               " + Common.kg(max));
+            r.add("Итоговый разброс F:             " + Common.kg(max - min));
+        }
+        if (!initialBags.isEmpty()) {
+            r.add("Лучший достигнутый разброс:     " + Common.kg(fBest));
+        }
+        r.add("Выполнено обменов:              " + completed);
+        r.add(line);
+        return r;
+    }
+
+    private void shutdownPlatformLater() {
+        addBehaviour(new WakerBehaviour(this, 3000) {
+            @Override
+            protected void onWake() {
+                try {
+                    Codec codec = new SLCodec();
+                    Ontology jmo = JADEManagementOntology.getInstance();
+                    getContentManager().registerLanguage(codec);
+                    getContentManager().registerOntology(jmo);
+                    ACLMessage msg = new ACLMessage(ACLMessage.REQUEST);
+                    msg.addReceiver(getAMS());
+                    msg.setLanguage(codec.getName());
+                    msg.setOntology(jmo.getName());
+                    getContentManager().fillContent(msg, new Action(getAID(), new ShutdownPlatform()));
+                    send(msg);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 }

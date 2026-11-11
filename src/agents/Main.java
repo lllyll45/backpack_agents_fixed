@@ -1,163 +1,132 @@
 package agents;
 
+import jade.core.Profile;
+import jade.core.ProfileImpl;
+import jade.core.Runtime;
+import jade.wrapper.ContainerController;
+
+import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Enumeration;
 import java.util.List;
+import java.util.Map;
 
+/**
+ * СЕРВЕР. Создаёт главный контейнер JADE, менеджера и агентов-предметов (данные из файла).
+ * Туристы здесь не создаются - они появляются, когда подключается клиент (ClientMain).
+ *
+ * Параметры (все необязательные):
+ *   --tourists N      сколько туристов должно подключиться (по умолчанию 3)
+ *   --items файл      файл с предметами (по умолчанию data/items.txt)
+ *   --capacity кг     вместимость рюкзака (по умолчанию 12)
+ *   --result файл     файл результата (по умолчанию result/result.txt)
+ *   --host адрес      IP этого компьютера, который увидят клиенты (если несколько сетевых адаптеров)
+ *   --port порт       порт платформы JADE (по умолчанию 1099)
+ *   --gui             открыть JADE RMA GUI
+ */
 public class Main {
-    public static void main(String[] args) {
-        int tourists = 4;
-        boolean isMainContainer = true;
-        String mainHost = "localhost";
-        double capacity = 12.0;
 
-        if (args.length >= 1) {
-            try {
-                tourists = Integer.parseInt(args[0]);
-            } catch (NumberFormatException e) {
-                System.err.println("Некорректное количество туристов.");
+    public static void main(String[] args) throws Exception {
+        Map<String, String> o = Common.parseArgs(args);
+        int tourists = Integer.parseInt(o.getOrDefault("tourists", "3"));
+        String itemsFile = o.getOrDefault("items", "data/items.txt");
+        int capacity = Common.toGrams(o.getOrDefault("capacity", "12"));
+        String resultFile = o.getOrDefault("result", "result/result.txt");
+        String port = o.getOrDefault("port", "1099");
+        String host = o.get("host");
+
+        List<String[]> items = readItems(itemsFile);
+        if (items.isEmpty()) {
+            System.out.println("Файл " + itemsFile + " не содержит предметов.");
+            return;
+        }
+        long total = 0;
+        for (String[] it : items) {
+            int g = Integer.parseInt(it[1]);
+            total += g;
+            if (g > capacity) {
+                System.out.println("Предмет \"" + it[0] + "\" (" + Common.kg(g) + ") тяжелее вместимости рюкзака.");
                 return;
             }
         }
-
-        if (args.length >= 2 && args[1].equalsIgnoreCase("client")) {
-            isMainContainer = false;
-        }
-
-        if (args.length >= 3 && !isMainContainer) {
-            mainHost = args[2];
-        }
-
-        if (args.length >= 2 && isMainContainer) {
-            try {
-                capacity = Double.parseDouble(args[1].replace(',', '.'));
-            } catch (NumberFormatException e) {
-                System.err.println("Некорректная вместимость рюкзака.");
-                return;
-            }
-        }
-
-        if (tourists < 1) {
-            System.err.println("Количество туристов должно быть не меньше одного.");
+        if (total > (long) tourists * capacity) {
+            System.out.println("Суммарная масса предметов " + Common.kg(total) + " больше общей вместимости "
+                    + tourists + " рюкзаков (" + Common.kg((long) tourists * capacity) + "). Увеличьте --tourists.");
             return;
         }
 
-        if (capacity <= 0) {
-            System.err.println("Вместимость рюкзака должна быть положительной.");
-            return;
+        Runtime rt = Runtime.instance();
+        rt.setCloseVM(true);
+        Profile p = new ProfileImpl();
+        p.setParameter(Profile.MAIN, "true");
+        p.setParameter(Profile.MAIN_PORT, port);
+        if (host != null) {
+            p.setParameter(Profile.MAIN_HOST, host);
+            p.setParameter(Profile.LOCAL_HOST, host);
         }
-
-        String prefix = getComputerPrefix();
-        String suffix = String.valueOf(System.currentTimeMillis() % 100000);
-        StringBuilder agents = new StringBuilder();
-
-        if (isMainContainer) {
-            List<String> items;
-
-            try {
-                Path itemsPath = Path.of("data", "items.txt");
-                if (!Files.exists(itemsPath)) {
-                    System.err.println("Файл data/items.txt не найден.");
-                    return;
-                }
-
-                items = Files.readAllLines(itemsPath)
-                        .stream()
-                        .map(String::trim)
-                        .filter(line -> !line.isEmpty())
-                        .filter(line -> !line.startsWith("#"))
-                        .toList();
-
-            } catch (Exception e) {
-                System.err.println("Ошибка чтения файла предметов: " + e.getMessage());
-                return;
-            }
-
-            if (items.isEmpty()) {
-                System.err.println("Файл items.txt не содержит предметов.");
-                return;
-            }
-
-            agents.append("manager:agents.ManagerAgent(")
-                    .append(tourists)
-                    .append(",")
-                    .append(capacity)
-                    .append(")");
-
-            for (String item : items) {
-                String[] parts = item.split("\\s+", 2);
-                if (parts.length != 2) {
-                    System.err.println("Некорректная строка в items.txt: " + item);
-                    return;
-                }
-
-                double weight;
-                try {
-                    weight = Double.parseDouble(parts[0].replace(',', '.'));
-                } catch (NumberFormatException e) {
-                    System.err.println("Некорректная масса предмета: " + item);
-                    return;
-                }
-
-                String name = parts[1].trim();
-                if (weight <= 0 || name.isEmpty()) {
-                    System.err.println("Некорректные данные предмета: " + item);
-                    return;
-                }
-
-                String agentName = name.replaceAll("[^a-zA-Zа-яА-Я0-9_]", "_");
-                agents.append(";item_")
-                        .append(agentName)
-                        .append(":agents.ItemAgent(")
-                        .append(weight)
-                        .append(")");
-            }
-        } else {
-            for (int i = 1; i <= tourists; i++) {
-                if (agents.length() > 0) agents.append(';');
-
-                agents.append(prefix)
-                        .append("_tourist_")
-                        .append(suffix)
-                        .append('_')
-                        .append(i)
-                        .append(":agents.TouristAgent");
-            }
+        if (o.containsKey("gui")) {
+            p.setParameter(Profile.GUI, "true");
         }
+        ContainerController main = rt.createMainContainer(p);
 
-        List<String> jadeArgs = new ArrayList<>();
+        printAddresses(port);
+        System.out.println("Предметов в файле: " + items.size() + ", общая масса " + Common.kg(total)
+                + ". Ждём подключения туристов: " + tourists);
 
-        if (isMainContainer) {
-            jadeArgs.add("-gui");
-        } else {
-            jadeArgs.add("-container");
-            jadeArgs.add("-container-name");
-            jadeArgs.add("Client_" + suffix);
-            jadeArgs.add("-host");
-            jadeArgs.add(mainHost);
+        // менеджер создаётся первым, чтобы предметам было кому регистрироваться
+        main.createNewAgent(Common.MANAGER, ManagerAgent.class.getName(),
+                new Object[]{tourists, capacity, resultFile}).start();
+
+        int i = 1;
+        for (String[] it : items) {
+            main.createNewAgent("item_" + (i++), ItemAgent.class.getName(),
+                    new Object[]{it[0], it[1]}).start();
         }
-
-        jadeArgs.add("-agents");
-        jadeArgs.add(agents.toString());
-
-        System.out.println("Компьютер: " + prefix);
-        System.out.println("Режим: " + (isMainContainer ? "СЕРВЕР" : "КЛИЕНТ"));
-        System.out.println("Количество туристов: " + tourists);
-        System.out.println("Вместимость рюкзака: " + capacity + " кг");
-        System.out.println("Запускаемые агенты: " + agents);
-
-        jade.Boot.main(jadeArgs.toArray(new String[0]));
+        // Main менеджеру ничего не сообщает: предметы регистрируются сами.
     }
 
-    private static String getComputerPrefix() {
+    /** Формат строки: название;масса_кг   (строки с # и пустые пропускаются). */
+    private static List<String[]> readItems(String file) throws Exception {
+        List<String[]> res = new ArrayList<>();
+        for (String line : Files.readAllLines(Paths.get(file), StandardCharsets.UTF_8)) {
+            line = line.replace("\uFEFF", "").trim();
+            if (line.isEmpty() || line.startsWith("#")) {
+                continue;
+            }
+            int sep = line.lastIndexOf(';');
+            if (sep < 0) {
+                System.out.println("Пропущена строка без ';': " + line);
+                continue;
+            }
+            String name = line.substring(0, sep).replaceAll("[|;=]", " ").trim();
+            int grams = Common.toGrams(line.substring(sep + 1));
+            res.add(new String[]{name, String.valueOf(grams)});
+        }
+        return res;
+    }
+
+    private static void printAddresses(String port) {
+        System.out.println("Сервер запущен. Клиенты должны подключаться по одному из адресов (порт " + port + "):");
         try {
-            return InetAddress.getLocalHost()
-                    .getHostName()
-                    .replaceAll("[^a-zA-Z0-9]", "");
-        } catch (Exception e) {
-            return "PC";
+            Enumeration<NetworkInterface> nis = NetworkInterface.getNetworkInterfaces();
+            for (NetworkInterface ni : Collections.list(nis)) {
+                if (!ni.isUp() || ni.isLoopback()) {
+                    continue;
+                }
+                for (InetAddress a : Collections.list(ni.getInetAddresses())) {
+                    if (a instanceof Inet4Address) {
+                        System.out.println("   " + a.getHostAddress() + "   (" + ni.getDisplayName() + ")");
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // адреса не обязательны для работы
         }
     }
 }

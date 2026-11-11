@@ -3,204 +3,182 @@ package agents;
 import jade.core.AID;
 import jade.core.Agent;
 import jade.core.behaviours.CyclicBehaviour;
-import jade.core.behaviours.TickerBehaviour;
-import jade.domain.DFService;
-import jade.domain.FIPAAgentManagement.DFAgentDescription;
-import jade.domain.FIPAAgentManagement.ServiceDescription;
-import jade.domain.FIPAException;
 import jade.lang.acl.ACLMessage;
 
-import java.util.*;
+import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.List;
+import java.util.Random;
 
+/**
+ * Предмет. Знает только своё название, массу, текущего владельца и признак блокировки.
+ * Сам регистрируется у менеджера и сам ищет владельца среди туристов (через DF).
+ */
 public class ItemAgent extends Agent {
-    private double weight = 1.0;
-    private String owner;
-    private String lockedBy;
-    private String lockTransaction;
-    private AID manager;
-    private boolean distributionStarted;
+
+    private enum State {WAIT_START, SEARCH, LATE}
+
+    private static final long OFFER_TIMEOUT = 8000;
+
+    private String itemName;
+    private int grams;
+
+    private State state = State.WAIT_START;
+    private String owner;          // локальное имя владельца или null
+    private boolean locked;        // предмет участвует в согласованном обмене
+
+    private boolean pending;       // предложение отправлено, ответа ещё нет
+    private String pendingId;
+    private long pendingDeadline;
+    private long nextOfferAt;
+    private int offerSeq;
+
+    private final Deque<AID> queue = new ArrayDeque<>();
+    private final Random rnd = new Random();
 
     @Override
     protected void setup() {
-        Object[] args = getArguments();
-        if (args != null && args.length > 0) {
-            try {
-                weight = Double.parseDouble(args[0].toString().replace(',', '.'));
-            } catch (NumberFormatException e) {
-                log("Некорректная масса в аргументах. Используется 1.0 кг.");
-            }
-        }
+        Object[] a = getArguments();
+        itemName = a[0].toString();
+        grams = Integer.parseInt(a[1].toString());
 
-        register("item", "Backpack-Item");
+        // Предмет сам сообщает менеджеру о регистрации (Main этого не делает).
+        Common.sendTo(this, ACLMessage.INFORM, Common.MANAGER, Common.T_REGISTER,
+                "Привет, я зарегистрировался", null);
+        System.out.println("[" + getLocalName() + "] предмет \"" + itemName + "\" (" + Common.kg(grams)
+                + ") зарегистрирован, ждём старта");
 
         addBehaviour(new CyclicBehaviour(this) {
             @Override
             public void action() {
-                ACLMessage msg = receive();
-                if (msg == null) {
-                    block();
-                    return;
+                ACLMessage m;
+                while ((m = myAgent.receive()) != null) {
+                    ItemAgent.this.handle(m);
                 }
-                ItemAgent.this.handle(msg);
+                search();
+                block(100);
             }
         });
+    }
 
-        addBehaviour(new TickerBehaviour(this, 1000) {
-            @Override
-            protected void onTick() {
-                if (manager == null) {
-                    manager = findService("manager");
-                    if (manager != null) {
-                        sendTo(manager, "READY_ITEM|" + itemName() + "|" + weight);
+    private void handle(ACLMessage m) {
+        String type = m.getOntology();
+        if (type == null) {
+            return;
+        }
+        String sender = m.getSender().getLocalName();
+        long now = System.currentTimeMillis();
+
+        switch (type) {
+            case Common.T_START: {
+                if (state == State.WAIT_START) {
+                    state = State.SEARCH;
+                    nextOfferAt = now + rnd.nextInt(300);
+                    System.out.println("[" + getLocalName() + "] старт поиска владельца для \"" + itemName + "\"");
+                }
+                break;
+            }
+            case Common.T_LATE: {
+                state = State.LATE;
+                System.out.println("[" + getLocalName() + "] регистрация закрыта, предмет \"" + itemName
+                        + "\" не участвует в распределении");
+                break;
+            }
+            case Common.T_OFFER: {
+                boolean current = pending && pendingId != null && pendingId.equals(m.getConversationId());
+                if (m.getPerformative() == ACLMessage.ACCEPT_PROPOSAL) {
+                    if (current && owner == null) {
+                        pending = false;
+                        owner = sender;
+                        locked = false;
+                        System.out.println("[" + getLocalName() + "] \"" + itemName + "\" принят туристом " + sender);
+                        notifyManager("OWNED");
+                    } else {
+                        System.out.println("[" + getLocalName() + "] устаревший ACCEPT от " + sender + " → REVOKE");
+                        // ответ устарел (например, по таймауту предложили другому) - владелец должен вернуть предмет
+                        Common.sendTo(this, ACLMessage.INFORM, sender, Common.T_REVOKE, "", null);
                     }
+                } else if (current) {
+                    pending = false;
+                    nextOfferAt = queue.isEmpty() ? now + 300 + rnd.nextInt(500) : now + 20;
                 }
-
+                break;
             }
-        });
-
-        log("Запущен. Масса предмета: " + fmt(weight) + " кг");
-    }
-
-    private void handle(ACLMessage msg) {
-        String content = msg.getContent() == null ? "" : msg.getContent();
-        String sender = msg.getSender().getLocalName();
-
-        if (content.equals("START_OFFER")) {
-            distributionStarted = true;
-            log("Готов к передаче по запросу менеджера.");
-        } else if (content.startsWith("TAKE_ITEM|")) {
-            String[] p = content.split("\\|", 2);
-            if (p.length == 2 && p[1].equals(itemName()) && owner == null && lockedBy == null) {
-                owner = sender;
-                log("Предмет принят туристом " + sender + ".");
-                reply(msg, "ITEM_ACCEPTED|" + itemName() + "|" + weight);
-                reportOwner();
-            } else {
-                log("Отклонён запрос на принятие от " + sender + ": предмет уже занят или запрос некорректен.");
-                reply(msg, "ITEM_TAKE_REFUSED|" + itemName());
+            case Common.T_DROP: {
+                // турист освободил место и отдал этот предмет
+                if (owner != null && owner.equals(sender)) {
+                    System.out.println("[" + getLocalName() + "] \"" + itemName + "\" освобождён туристом " + sender);
+                    owner = null;
+                    locked = false;
+                    queue.clear();
+                    nextOfferAt = now + 200 + rnd.nextInt(400);
+                    notifyManager("NOT_OWNED");
+                }
+                break;
             }
-        } else if (content.startsWith("RELEASE_ITEM|")) {
-            if (owner != null && owner.equals(sender) && lockedBy == null) {
-                log("Турист " + sender + " освобождает предмет.");
-                owner = null;
-                reply(msg, "ITEM_RELEASED|" + itemName());
-                reportOwner();
-                log("Предмет освобождён и снова ищет владельца.");
-            } else {
-                log("Отказано в освобождении по запросу туриста " + sender +
-                        ": предмет не принадлежит ему или заблокирован.");
-                reply(msg, "ITEM_RELEASE_REFUSED|" + itemName());
+            case Common.T_LOCK: {
+                if (owner != null && owner.equals(sender)) {
+                    locked = true;
+                }
+                break;
             }
-        } else if (content.startsWith("LOCK_ITEM|")) {
-            String[] p = content.split("\\|", 2);
-            if (p.length == 2 && sender.equals(owner) && lockedBy == null) {
-                lockedBy = sender;
-                lockTransaction = p[1];
-                log("Заблокирован владельцем " + sender +
-                        " для обмена. Транзакция: " + lockTransaction);
-                reply(msg, "LOCK_OK|" + p[1] + "|" + itemName());
-            } else {
-                log("Не удалось заблокировать предмет по запросу " + sender + ".");
-                reply(msg, "LOCK_REFUSED|" + (p.length > 1 ? p[1] : "-") + "|" + itemName());
+            case Common.T_UNLOCK: {
+                if (owner != null && owner.equals(sender)) {
+                    locked = false;
+                }
+                break;
             }
-        } else if (content.startsWith("TRANSFER_OWNER|")) {
-            String[] p = content.split("\\|", 3);
-            if (p.length == 3 && sender.equals(lockedBy)
-                    && sender.equals(owner) && p[1].equals(lockTransaction)) {
-                String oldOwner = owner;
-                owner = p[2];
-                log("Владелец изменён: " + oldOwner + " -> " + owner +
-                        ". Транзакция: " + p[1]);
-                reply(msg, "OWNER_CHANGED|" + p[1] + "|" + itemName() + "|" + owner);
-                reportOwner();
-            } else {
-                log("Передача владельца отклонена. Отправитель: " + sender);
-                reply(msg, "TRANSFER_REFUSED|" + (p.length > 1 ? p[1] : "-") + "|" + itemName());
+            case Common.T_TRANSFER: {
+                // обмен: текущий владелец передаёт предмет новому
+                if (owner != null && owner.equals(sender)) {
+                    String prev = owner;
+                    owner = m.getContent();
+                    locked = false;
+                    System.out.println("[" + getLocalName() + "] \"" + itemName + "\" передан: " + prev + " → " + owner);
+                }
+                break;
             }
-        } else if (content.startsWith("UNLOCK_ITEM|")) {
-            String[] p = content.split("\\|", 2);
-            if (p.length == 2 && sender.equals(lockedBy) && p[1].equals(lockTransaction)) {
-                lockedBy = null;
-                lockTransaction = null;
-                log("Блокировка снята. Транзакция: " + p[1]);
-                reply(msg, "UNLOCK_OK|" + p[1] + "|" + itemName());
-            } else {
-                log("Не удалось снять блокировку. Запрос от " + sender);
-                reply(msg, "UNLOCK_REFUSED|" + itemName());
-            }
+            default:
+                break;
         }
     }
 
-    private void reportOwner() {
-        if (manager != null) {
-            String message = owner == null
-                    ? "ITEM_UNOWNED|" + itemName()
-                    : "ITEM_OWNED|" + itemName() + "|" + owner;
-            sendTo(manager, message);
+    private void search() {
+        if (state != State.SEARCH || owner != null) {
+            return;
         }
-    }
-
-    private String itemName() {
-        String name = getLocalName();
-        return name.startsWith("item_") ? name.substring(5) : name;
-    }
-
-    private void register(String type, String name) {
-        DFAgentDescription dfd = new DFAgentDescription();
-        dfd.setName(getAID());
-        ServiceDescription sd = new ServiceDescription();
-        sd.setType(type);
-        sd.setName(name);
-        dfd.addServices(sd);
-        try {
-            DFService.register(this, dfd);
-        } catch (FIPAException e) {
-            e.printStackTrace();
+        long now = System.currentTimeMillis();
+        if (pending) {
+            if (now > pendingDeadline) {
+                System.out.println("[" + getLocalName() + "] таймаут предложения \"" + itemName + "\", ищем дальше");
+                pending = false;
+                nextOfferAt = now;
+            }
+            return;
         }
-    }
-
-    private AID findService(String type) {
-        DFAgentDescription template = new DFAgentDescription();
-        ServiceDescription sd = new ServiceDescription();
-        sd.setType(type);
-        template.addServices(sd);
-        try {
-            DFAgentDescription[] result = DFService.search(this, template);
-            return result.length == 0 ? null : result[0].getName();
-        } catch (FIPAException e) {
-            return null;
+        if (now < nextOfferAt) {
+            return;
         }
-    }
-
-    private void sendTo(AID to, String content) {
-        if (to == null) return;
-        ACLMessage message = new ACLMessage(ACLMessage.INFORM);
-        message.addReceiver(to);
-        message.setContent(content);
-        send(message);
-    }
-
-    private void reply(ACLMessage original, String content) {
-        ACLMessage response = original.createReply();
-        response.setPerformative(ACLMessage.INFORM);
-        response.setContent(content);
-        send(response);
-    }
-
-    private String fmt(double value) {
-        return String.format(Locale.US, "%.2f", value);
-    }
-
-    private void log(String message) {
-        System.out.printf("[%1$tT] [ПРЕДМЕТ %2$s] %3$s%n",
-                new Date(), itemName(), message);
-    }
-
-    @Override
-    protected void takeDown() {
-        try {
-            DFService.deregister(this);
-        } catch (FIPAException ignored) {
+        if (queue.isEmpty()) {
+            List<AID> tourists = Common.findTourists(this);
+            Collections.shuffle(tourists, rnd);
+            queue.addAll(tourists);
+            if (queue.isEmpty()) {
+                nextOfferAt = now + 500;
+                return;
+            }
         }
+        AID target = queue.poll();
+        pendingId = getLocalName() + "-" + (++offerSeq);
+        pending = true;
+        pendingDeadline = now + OFFER_TIMEOUT;
+        System.out.println("[" + getLocalName() + "] предлагаю \"" + itemName + "\" (" + Common.kg(grams)
+                + ") туристу " + target.getLocalName());
+        Common.send(this, ACLMessage.PROPOSE, target, Common.T_OFFER, itemName + "|" + grams, pendingId);
+    }
+
+    private void notifyManager(String what) {
+        Common.sendTo(this, ACLMessage.INFORM, Common.MANAGER, Common.T_OWNER, what, null);
     }
 }
