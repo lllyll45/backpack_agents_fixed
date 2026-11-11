@@ -3,7 +3,6 @@ package agents;
 import jade.core.AID;
 import jade.core.Agent;
 import jade.core.behaviours.CyclicBehaviour;
-import jade.core.behaviours.TickerBehaviour;
 import jade.domain.DFService;
 import jade.domain.FIPAAgentManagement.DFAgentDescription;
 import jade.domain.FIPAAgentManagement.ServiceDescription;
@@ -28,6 +27,9 @@ public class ManagerAgent extends Agent {
     private final Set<String> noImprovement = new HashSet<>();
     private final Map<String, Map<String, Double>> transactionReports = new HashMap<>();
     private final Map<String, Double> initialReports = new HashMap<>();
+    private final Deque<String> distributionQueue = new ArrayDeque<>();
+    private final Set<String> triedTouristsForCurrentItem = new HashSet<>();
+    private String currentDistributionItem;
 
     private boolean distributionStarted;
     private boolean optimizationStarted;
@@ -52,7 +54,7 @@ public class ManagerAgent extends Agent {
         }
 
         loadItems();
-        registerManager();
+        register();
 
         addBehaviour(new CyclicBehaviour(this) {
             @Override
@@ -66,23 +68,13 @@ public class ManagerAgent extends Agent {
             }
         });
 
-        // Менеджер сам обнаруживает туристов в DF.
-        // Туристы не отправляют ему READY_TOURIST и не регистрируются у него.
-        addBehaviour(new TickerBehaviour(this, 1000) {
-            @Override
-            protected void onTick() {
-                if (stopped) return;
-                discoverTourists();
-                tryStartDistribution();
-            }
-        });
-
         log("Запущен. Ожидается туристов: " + expectedTourists +
                 ", вместимость рюкзака: " + fmt(capacity) + " кг.");
     }
 
     private void handle(ACLMessage msg) {
         String content = msg.getContent() == null ? "" : msg.getContent();
+        String sender = msg.getSender().getLocalName();
 
         if (content.startsWith("READY_ITEM|")) {
             String[] p = content.split("\\|", 3);
@@ -91,72 +83,62 @@ public class ManagerAgent extends Agent {
                 itemOwners.putIfAbsent(p[1], null);
                 itemAgents.put(p[1], msg.getSender());
                 if (readyItems.add(p[1])) {
-                    log("Обнаружен предмет " + p[1] +
+                    log("Зарегистрирован предмет " + p[1] +
                             ", масса " + fmt(number(p[2])) + " кг. Всего: " +
                             readyItems.size() + "/" + itemWeights.size());
                 }
             }
             tryStartDistribution();
-
+        } else if (content.startsWith("READY_TOURIST|")) {
+            if (!tourists.containsKey(sender)) {
+                tourists.put(sender, msg.getSender());
+                touristWeights.put(sender, 0.0);
+                log("Зарегистрирован турист " + sender + ". Всего: " +
+                        tourists.size() + "/" + expectedTourists);
+            }
+            tryStartDistribution();
         } else if (content.startsWith("ITEM_OWNED|")) {
             String[] p = content.split("\\|", 3);
             if (p.length == 3 && itemOwners.containsKey(p[1])) {
                 itemOwners.put(p[1], p[2]);
                 log("Предмет " + p[1] + " теперь принадлежит туристу " + p[2]);
             }
+            if (p.length == 3 && p[1].equals(currentDistributionItem)) {
+                currentDistributionItem = null;
+                triedTouristsForCurrentItem.clear();
+                if (!distributionQueue.isEmpty() && distributionQueue.peekFirst().equals(p[1])) {
+                    distributionQueue.removeFirst();
+                }
+                startNextDistributionItem();
+            }
             checkDistributionComplete();
-
         } else if (content.startsWith("ITEM_UNOWNED|")) {
             String[] p = content.split("\\|", 2);
             if (p.length == 2 && itemOwners.containsKey(p[1])) {
                 itemOwners.put(p[1], null);
                 log("Предмет " + p[1] + " временно остался без владельца.");
+                if (!distributionQueue.contains(p[1])) distributionQueue.addLast(p[1]);
+                if (currentDistributionItem == null) startNextDistributionItem();
             }
-
+        } else if (content.startsWith("REJECT_ITEM|")) {
+            String[] p = content.split("\\|", 3);
+            if (p.length >= 2 && p[1].equals(currentDistributionItem)) {
+                triedTouristsForCurrentItem.add(sender);
+                log("Турист " + sender + " не смог принять " + p[1] + ". Ищу следующего туриста.");
+                offerCurrentItemToNextTourist();
+            }
         } else if (content.startsWith("BAG_MASS|")) {
             String[] p = content.split("\\|", 4);
             if (p.length >= 4) {
                 handleBagMass(p[1], p[2], number(p[3]));
             }
-
         } else if (content.startsWith("NO_IMPROVEMENT|")) {
-            String tourist = msg.getSender().getLocalName();
-            if (!tourists.containsKey(tourist)) {
-                log("Получено сообщение NO_IMPROVEMENT от неизвестного туриста " + tourist);
-                return;
-            }
-
-            if (noImprovement.add(tourist)) {
-                log("Турист " + tourist + " сообщил, что не нашёл улучшающих обменов. " +
-                        "Отметили " + noImprovement.size() + "/" + tourists.size());
-            }
-
+            noImprovement.add(sender);
+            log("Турист " + sender + " сообщил, что не нашёл улучшающих обменов. " +
+                    "Отметили " + noImprovement.size() + "/" + tourists.size());
             if (optimizationStarted && noImprovement.containsAll(tourists.keySet())) {
                 stopSystem("все туристы исчерпали варианты улучшающих обменов");
             }
-        }
-    }
-
-    private void discoverTourists() {
-        DFAgentDescription template = new DFAgentDescription();
-        ServiceDescription sd = new ServiceDescription();
-        sd.setType("tourist");
-        template.addServices(sd);
-
-        try {
-            DFAgentDescription[] found = DFService.search(this, template);
-            for (DFAgentDescription description : found) {
-                AID aid = description.getName();
-                String localName = aid.getLocalName();
-                if (!tourists.containsKey(localName) && tourists.size() < expectedTourists) {
-                    tourists.put(localName, aid);
-                    touristWeights.put(localName, 0.0);
-                    log("Обнаружен турист " + localName + ". Всего: " +
-                            tourists.size() + "/" + expectedTourists);
-                }
-            }
-        } catch (FIPAException e) {
-            log("Ошибка поиска туристов в DF: " + e.getMessage());
         }
     }
 
@@ -175,11 +157,55 @@ public class ManagerAgent extends Agent {
         for (AID tourist : tourists.values()) {
             sendTo(tourist, config);
         }
-        for (AID item : itemAgents.values()) {
-            sendTo(item, "START_OFFER");
+        distributionQueue.clear();
+        distributionQueue.addAll(itemWeights.keySet());
+        log("Все агенты зарегистрированы. Менеджер запускает последовательную раздачу предметов.");
+        startNextDistributionItem();
+    }
+
+    private void startNextDistributionItem() {
+        if (!distributionStarted || optimizationStarted || stopped || currentDistributionItem != null) return;
+
+        while (!distributionQueue.isEmpty() && itemOwners.get(distributionQueue.peekFirst()) != null) {
+            distributionQueue.removeFirst();
+        }
+        if (distributionQueue.isEmpty()) {
+            checkDistributionComplete();
+            return;
         }
 
-        log("Все необходимые агенты обнаружены. Запущен первый этап распределения.");
+        currentDistributionItem = distributionQueue.peekFirst();
+        triedTouristsForCurrentItem.clear();
+        offerCurrentItemToNextTourist();
+    }
+
+    private void offerCurrentItemToNextTourist() {
+        if (currentDistributionItem == null || optimizationStarted || stopped) return;
+
+        String selected = null;
+        double minWeight = Double.MAX_VALUE;
+        for (String tourist : tourists.keySet()) {
+            if (triedTouristsForCurrentItem.contains(tourist)) continue;
+            double weight = calculateWeight(tourist);
+            if (weight < minWeight) {
+                minWeight = weight;
+                selected = tourist;
+            }
+        }
+
+        if (selected == null) {
+            log("Ни один турист не смог принять предмет " + currentDistributionItem +
+                    ". Распределение остановлено: проверьте вместимость рюкзаков и веса предметов.");
+            stopSystem("невозможно распределить предмет " + currentDistributionItem);
+            return;
+        }
+
+        AID itemAgent = itemAgents.get(currentDistributionItem);
+        sendTo(tourists.get(selected), "OFFER_ITEM|" + currentDistributionItem + "|" +
+                itemWeights.get(currentDistributionItem) + "|" +
+                (itemAgent == null ? "" : itemAgent.getLocalName()));
+        log("Предлагает предмет " + currentDistributionItem + " туристу " + selected +
+                " (текущая масса " + fmt(minWeight) + " кг).");
     }
 
     private void checkDistributionComplete() {
@@ -231,7 +257,7 @@ public class ManagerAgent extends Agent {
                 " кг. Транзакция " + transaction +
                 ". Отчётов по обмену: " + reports.size() + "/2");
 
-        // Один обмен затрагивает ровно двух туристов.
+        // Каждый успешный обмен выполняют ровно два туриста.
         if (reports.size() >= 2) {
             touristWeights.putAll(reports);
             transactionReports.remove(transaction);
@@ -393,7 +419,7 @@ public class ManagerAgent extends Agent {
         }
     }
 
-    private void registerManager() {
+    private void register() {
         DFAgentDescription dfd = new DFAgentDescription();
         dfd.setName(getAID());
 
@@ -405,7 +431,7 @@ public class ManagerAgent extends Agent {
         try {
             DFService.register(this, dfd);
         } catch (FIPAException e) {
-            log("Не удалось зарегистрировать менеджера в DF: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 

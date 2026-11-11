@@ -19,9 +19,6 @@ public class ItemAgent extends Agent {
     private String lockTransaction;
     private AID manager;
     private boolean distributionStarted;
-    private String pendingOfferTo;
-
-    private final Map<String, String> lastAttemptedSignature = new HashMap<>();
 
     @Override
     protected void setup() {
@@ -58,9 +55,6 @@ public class ItemAgent extends Agent {
                     }
                 }
 
-                if (distributionStarted && owner == null && pendingOfferTo == null) {
-                    requestSignatures();
-                }
             }
         });
 
@@ -73,41 +67,22 @@ public class ItemAgent extends Agent {
 
         if (content.equals("START_OFFER")) {
             distributionStarted = true;
-            log("Начал поиск владельца.");
-        } else if (content.startsWith("BAG_SIGNATURE|")) {
-            String[] p = content.split("\\|", 3);
-            if (p.length == 3 && owner == null && pendingOfferTo == null) {
-                String previous = lastAttemptedSignature.get(sender);
-                if (!Objects.equals(previous, p[2])) {
-                    pendingOfferTo = sender;
-                    log("Предлагает предмет туристу " + sender);
-                    sendTo(msg.getSender(), "OFFER_ITEM|" + itemName() + "|" + weight);
-                }
-            }
+            log("Готов к передаче по запросу менеджера.");
         } else if (content.startsWith("TAKE_ITEM|")) {
-            if (owner == null && sender.equals(pendingOfferTo)) {
+            String[] p = content.split("\\|", 2);
+            if (p.length == 2 && p[1].equals(itemName()) && owner == null && lockedBy == null) {
                 owner = sender;
-                pendingOfferTo = null;
-                lastAttemptedSignature.remove(sender);
-                log("Турист " + sender + " ПРИНЯЛ предмет.");
+                log("Предмет принят туристом " + sender + ".");
                 reply(msg, "ITEM_ACCEPTED|" + itemName() + "|" + weight);
                 reportOwner();
             } else {
-                log("Получен запрос на принятие от " + sender +
-                        ", но предмет уже занят или предложение ему не отправлялось.");
-            }
-        } else if (content.startsWith("REJECT_ITEM|")) {
-            String[] p = content.split("\\|", 3);
-            if (p.length == 3 && sender.equals(pendingOfferTo)) {
-                lastAttemptedSignature.put(sender, p[2]);
-                pendingOfferTo = null;
-                log("Турист " + sender + " ОТКЛОНИЛ предложение.");
+                log("Отклонён запрос на принятие от " + sender + ": предмет уже занят или запрос некорректен.");
+                reply(msg, "ITEM_TAKE_REFUSED|" + itemName());
             }
         } else if (content.startsWith("RELEASE_ITEM|")) {
             if (owner != null && owner.equals(sender) && lockedBy == null) {
                 log("Турист " + sender + " освобождает предмет.");
                 owner = null;
-                lastAttemptedSignature.remove(sender);
                 reply(msg, "ITEM_RELEASED|" + itemName());
                 reportOwner();
                 log("Предмет освобождён и снова ищет владельца.");
@@ -156,13 +131,6 @@ public class ItemAgent extends Agent {
         }
     }
 
-    private void requestSignatures() {
-        AID[] tourists = findServices("tourist");
-        for (AID tourist : tourists) {
-            sendTo(tourist, "GET_BAG_SIGNATURE|" + itemName());
-        }
-    }
-
     private void reportOwner() {
         if (manager != null) {
             String message = owner == null
@@ -192,25 +160,15 @@ public class ItemAgent extends Agent {
     }
 
     private AID findService(String type) {
-        AID[] found = findServices(type);
-        return found.length == 0 ? null : found[0];
-    }
-
-    private AID[] findServices(String type) {
         DFAgentDescription template = new DFAgentDescription();
         ServiceDescription sd = new ServiceDescription();
         sd.setType(type);
         template.addServices(sd);
-
         try {
             DFAgentDescription[] result = DFService.search(this, template);
-            AID[] ids = new AID[result.length];
-            for (int i = 0; i < result.length; i++) {
-                ids[i] = result[i].getName();
-            }
-            return ids;
+            return result.length == 0 ? null : result[0].getName();
         } catch (FIPAException e) {
-            return new AID[0];
+            return null;
         }
     }
 

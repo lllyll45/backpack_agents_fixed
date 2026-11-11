@@ -52,7 +52,7 @@ public class TouristAgent extends Agent {
 
     @Override
     protected void setup() {
-        registerInDF();
+        register();
 
         addBehaviour(new CyclicBehaviour(this) {
             @Override
@@ -66,7 +66,7 @@ public class TouristAgent extends Agent {
             }
         });
 
-        addBehaviour(new TickerBehaviour(this, 1000) {
+        addBehaviour(new TickerBehaviour(this, 1200) {
             @Override
             protected void onTick() {
                 if (manager == null) {
@@ -79,7 +79,7 @@ public class TouristAgent extends Agent {
             }
         });
 
-        log("Запущен. Ожидает настройки от менеджера.");
+        log("Запущен.");
     }
 
     private void handle(ACLMessage msg) {
@@ -87,9 +87,6 @@ public class TouristAgent extends Agent {
         String sender = msg.getSender().getLocalName();
 
         if (content.startsWith("DISTRIBUTION_CONFIG|")) {
-            // Сообщение с конфигурацией приходит от менеджера.
-            // Сохраняем его AID до отправки первого отчёта INIT.
-            manager = msg.getSender();
             String[] p = content.split("\\|", 3);
             if (p.length == 3) {
                 capacity = number(p[1]);
@@ -98,14 +95,8 @@ public class TouristAgent extends Agent {
                 log("Получены настройки распределения. Вместимость рюкзака: " +
                         fmt(capacity) + " кг. Известно предметов: " + itemWeights.size());
             }
-
-        } else if (content.startsWith("GET_BAG_SIGNATURE|")) {
-            String item = content.substring("GET_BAG_SIGNATURE|".length());
-            sendTo(msg.getSender(), "BAG_SIGNATURE|" + item + "|" + bagSignature());
-
         } else if (content.startsWith("OFFER_ITEM|")) {
             handleItemOffer(msg, content);
-
         } else if (content.startsWith("ITEM_RELEASED|")) {
             if (pendingDistribution) {
                 log("Освободил предмет " + pendingOldItem +
@@ -114,12 +105,19 @@ public class TouristAgent extends Agent {
                 pendingOldItem = null;
                 sendTo(pendingNewItemAgent, "TAKE_ITEM|" + pendingNewItem);
             }
-
         } else if (content.startsWith("ITEM_RELEASE_REFUSED|")) {
             log("Не удалось освободить " + pendingOldItem +
                     ". Предложение нового предмета отклонено.");
+            if (pendingNewItem != null) {
+                sendTo(manager, "REJECT_ITEM|" + pendingNewItem + "|" + bagSignature());
+            }
             resetPendingDistribution();
-
+        } else if (content.startsWith("ITEM_TAKE_REFUSED|")) {
+            if (pendingNewItem != null) {
+                log("Предметный агент отказал в передаче " + pendingNewItem + ".");
+                sendTo(manager, "REJECT_ITEM|" + pendingNewItem + "|" + bagSignature());
+            }
+            resetPendingDistribution();
         } else if (content.startsWith("ITEM_ACCEPTED|")) {
             String[] p = content.split("\\|", 3);
             if (p.length == 3) {
@@ -129,17 +127,16 @@ public class TouristAgent extends Agent {
                 log("ПРИНЯЛ предмет " + p[1] + ". Масса рюкзака: " + fmt(myWeight) + " кг");
                 resetPendingDistribution();
             }
-
         } else if (content.startsWith("DISTRIBUTION_COMPLETE|")) {
             String items = content.substring("DISTRIBUTION_COMPLETE|".length());
             myItems.clear();
             if (!items.equals("-")) myItems.addAll(Arrays.asList(items.split(";")));
             recalculateWeight();
             distributionComplete = true;
+            resetPendingDistribution();
             sendBagMass("INIT");
             log("Первоначальное распределение завершено. Предметов: " +
                     myItems.size() + ", масса рюкзака: " + fmt(myWeight) + " кг");
-
         } else if (content.startsWith("GLOBAL_STATE|")) {
             String[] p = content.split("\\|", 5);
             if (p.length >= 5) {
@@ -157,27 +154,20 @@ public class TouristAgent extends Agent {
                         " кг; средняя: " + fmt(avgWeight) +
                         " кг; общий разброс: " + fmt(currentDiff) + " кг");
             }
-
         } else if (content.startsWith("REQUEST_WEIGHT|")) {
             sendTo(msg.getSender(), "WEIGHT_INFO|" + getLocalName() + "|" + myWeight);
-
         } else if (content.startsWith("WEIGHT_INFO|")) {
             handleWeightInfo(sender, content);
-
         } else if (content.startsWith("PROPOSE_SWAP|")) {
             handleProposal(msg, content);
-
         } else if (content.startsWith("ACCEPT_SWAP|")) {
             handleAccept(sender, content);
-
         } else if (content.startsWith("REJECT_SWAP|")) {
             log("Турист " + sender + " отклонил предложение обмена. " + content);
             triedPartners.add(sender);
             clearExchange();
-
         } else if (content.startsWith("LOCK_OK|")) {
             handleLockOk(content);
-
         } else if (content.startsWith("LOCK_REFUSED|")) {
             log("Не удалось заблокировать предмет для обмена с " + partnerName);
             if (partnerName != null) {
@@ -186,33 +176,27 @@ public class TouristAgent extends Agent {
                 triedPartners.add(partnerName);
             }
             clearExchange();
-
         } else if (content.startsWith("LOCK_PARTNER|")) {
             handlePartnerLock(msg, content);
-
         } else if (content.startsWith("PARTNER_LOCKED|")) {
             if ("INITIATOR".equals(role) && transaction != null &&
                     content.contains(transaction)) {
                 log("Партнёр " + partnerName + " заблокировал свой предмет. Начинается обмен.");
                 sendTo(new AID(partnerName, AID.ISLOCALNAME), "COMMIT_SWAP|" + transaction);
             }
-
         } else if (content.startsWith("COMMIT_SWAP|")) {
             if ("RECEIVER".equals(role) && transaction != null &&
                     content.contains(transaction)) {
                 transferOwnItemToPartner();
             }
-
         } else if (content.startsWith("OWNER_CHANGED|")) {
             handleOwnerChanged(content);
-
         } else if (content.startsWith("PARTNER_TRANSFER_DONE|")) {
             if ("INITIATOR".equals(role) && transaction != null &&
                     content.contains(transaction)) {
                 log("Партнёр завершил передачу своего предмета. Передаю свой предмет.");
                 transferOwnItemToPartner();
             }
-
         } else if (content.startsWith("STOP|")) {
             stopped = true;
             log("Получена команда завершения: " +
@@ -221,11 +205,17 @@ public class TouristAgent extends Agent {
     }
 
     private void handleItemOffer(ACLMessage msg, String content) {
-        String[] p = content.split("\\|", 3);
-        if (p.length != 3) return;
+        String[] p = content.split("\\|", 4);
+        if (p.length != 4) return;
 
         String offered = p[1];
         double offeredWeight = number(p[2]);
+        AID offeredAgent = findItemAgent(offered);
+        if (offeredAgent == null || !offeredAgent.getLocalName().equals(p[3])) {
+            log("Не найден агент предложенного предмета " + offered + ". Предложение отклонено.");
+            sendTo(manager, "REJECT_ITEM|" + offered + "|" + bagSignature());
+            return;
+        }
 
         log("Получил предложение предмета " + offered +
                 " массой " + fmt(offeredWeight) + " кг от " +
@@ -233,13 +223,13 @@ public class TouristAgent extends Agent {
 
         if (!distributionConfigured || pendingDistribution || stopped) {
             log("Отклонил " + offered + ": турист пока не готов принять предмет.");
-            sendTo(msg.getSender(), "REJECT_ITEM|" + offered + "|" + bagSignature());
+            sendTo(manager, "REJECT_ITEM|" + offered + "|" + bagSignature());
             return;
         }
 
         if (myItems.contains(offered)) {
             log("Отклонил " + offered + ": предмет уже находится в рюкзаке.");
-            sendTo(msg.getSender(), "REJECT_ITEM|" + offered + "|" + bagSignature());
+            sendTo(manager, "REJECT_ITEM|" + offered + "|" + bagSignature());
             return;
         }
 
@@ -247,7 +237,7 @@ public class TouristAgent extends Agent {
         if (afterAdd <= capacity + 1e-9) {
             pendingDistribution = true;
             pendingNewItem = offered;
-            pendingNewItemAgent = msg.getSender();
+            pendingNewItemAgent = offeredAgent;
             log("Принимает " + offered + " без освобождения другого предмета. " +
                     "Расчётная масса: " + fmt(afterAdd) + " кг.");
             sendTo(pendingNewItemAgent, "TAKE_ITEM|" + offered);
@@ -272,14 +262,14 @@ public class TouristAgent extends Agent {
         if (bestRemove == null) {
             log("Отклонил " + offered + ": нет предмета, освобождение которого " +
                     "позволит уложиться во вместимость " + fmt(capacity) + " кг.");
-            sendTo(msg.getSender(), "REJECT_ITEM|" + offered + "|" + bagSignature());
+            sendTo(manager, "REJECT_ITEM|" + offered + "|" + bagSignature());
             return;
         }
 
         pendingDistribution = true;
         pendingNewItem = offered;
         pendingOldItem = bestRemove;
-        pendingNewItemAgent = msg.getSender();
+        pendingNewItemAgent = offeredAgent;
 
         log("Для принятия " + offered + " выбрал освободить " + bestRemove +
                 ". Расчётная масса после замены: " +
@@ -291,18 +281,16 @@ public class TouristAgent extends Agent {
             log("Не найден агент освобождаемого предмета " + bestRemove +
                     ". Отклоняю предложение.");
             resetPendingDistribution();
-            sendTo(msg.getSender(), "REJECT_ITEM|" + offered + "|" + bagSignature());
+            sendTo(manager, "REJECT_ITEM|" + offered + "|" + bagSignature());
         } else {
             sendTo(oldAgent, "RELEASE_ITEM|" + offered);
         }
     }
 
-
     private void tryInitiateExchange() {
         if (!distributionComplete || !optimizationStarted || busy()) return;
 
         List<String> candidates = new ArrayList<>();
-
         for (Map.Entry<String, Double> entry : allTouristWeights.entrySet()) {
             if (!entry.getKey().equals(getLocalName())
                     && (myWeight - avgWeight) * (entry.getValue() - avgWeight) < -1e-9
@@ -311,49 +299,33 @@ public class TouristAgent extends Agent {
             }
         }
 
-        Collections.sort(candidates);
-
         if (candidates.isEmpty()) {
             reportNoImprovement();
             return;
         }
 
+        Collections.sort(candidates);
         partnerName = candidates.get(0);
 
-        // Для каждой пары определяется единственный возможный инициатор.
+        // Для каждой пары в раунде выбирается один инициатор.
         String first = getLocalName().compareTo(partnerName) <= 0
                 ? getLocalName() : partnerName;
-
         String second = getLocalName().compareTo(partnerName) <= 0
                 ? partnerName : getLocalName();
-
         String elected = (epoch % 2 == 0) ? first : second;
 
-        // Если инициировать должен партнёр, не застреваем на этой паре:
-        // пробуем следующего кандидата при следующем тике.
-        if (!getLocalName().equals(elected)) {
-            log("Не выбран инициатором обмена с " + partnerName
-                    + ". Перехожу к следующему кандидату.");
-
-            triedPartners.add(partnerName);
-            partnerName = null;
-            return;
-        }
+        if (!getLocalName().equals(elected)) return;
 
         role = "INITIATOR";
         waitingWeight = true;
         transaction = getLocalName() + "_" + epoch + "_" + System.nanoTime();
 
-        log("Инициирует обмен с " + partnerName
-                + ". Моя масса: " + fmt(myWeight)
-                + " кг, масса партнёра: "
-                + fmt(allTouristWeights.getOrDefault(partnerName, 0.0))
-                + " кг.");
-
+        log("Инициирует обмен с " + partnerName +
+                ". Моя масса: " + fmt(myWeight) + " кг, масса партнёра: " +
+                fmt(allTouristWeights.getOrDefault(partnerName, 0.0)) + " кг.");
         sendTo(new AID(partnerName, AID.ISLOCALNAME),
                 "REQUEST_WEIGHT|" + transaction);
     }
-
 
     private void handleWeightInfo(String sender, String content) {
         if (!waitingWeight || !sender.equals(partnerName)) return;
@@ -391,10 +363,8 @@ public class TouristAgent extends Agent {
         double bestDistance = Double.MAX_VALUE;
 
         for (String item : myItems) {
-            double newWeight = myWeight -
-                    itemWeights.getOrDefault(item, 0.0);
-            double distance = Math.abs(newWeight - avgWeight);
-
+            double x = itemWeights.getOrDefault(item, 0.0);
+            double distance = Math.abs(myWeight - x - avgWeight);
             if (distance < bestDistance) {
                 bestDistance = distance;
                 best = item;
@@ -419,27 +389,21 @@ public class TouristAgent extends Agent {
         double offeredWeight = number(p[3]);
         double initiatorWeight = number(p[4]);
 
-        double beforeOwn = Math.abs(myWeight - avgWeight);
         String best = null;
         double bestDistance = Double.MAX_VALUE;
 
         for (String item : myItems) {
-            double newWeight = myWeight -
-                    itemWeights.getOrDefault(item, 0.0) + offeredWeight;
-            double distance = Math.abs(newWeight - avgWeight);
-
+            double y = itemWeights.getOrDefault(item, 0.0);
+            double distance = Math.abs(myWeight - y + offeredWeight - avgWeight);
             if (distance < bestDistance) {
                 bestDistance = distance;
                 best = item;
             }
         }
 
-        if (best == null || bestDistance >= beforeOwn - 1e-9) {
-            log("Отклонил обмен от " + sender +
-                    ": получение " + offeredItem +
-                    " не приближает массу рюкзака к средней.");
-            sendTo(msg.getSender(),
-                    "REJECT_SWAP|" + tx + "|моя масса не приближается к средней");
+        if (best == null) {
+            log("Отклонил обмен от " + sender + ": в рюкзаке нет предмета для ответного обмена.");
+            sendTo(msg.getSender(), "REJECT_SWAP|" + tx + "|нет предмета для обмена");
             return;
         }
 
@@ -484,9 +448,7 @@ public class TouristAgent extends Agent {
         double partnerOld = allTouristWeights.getOrDefault(partnerName, 0.0);
         double partnerNew = partnerOld - partnerGiveWeight + ownGiveWeight;
 
-        if (Math.abs(newOwn - avgWeight) >=
-                Math.abs(myWeight - avgWeight) - 1e-9
-                || !improvesGlobal(getLocalName(), newOwn, partnerName, partnerNew)) {
+        if (!improvesGlobal(getLocalName(), newOwn, partnerName, partnerNew)) {
             log("Получил согласие от " + sender +
                     ", но отклоняет обмен после повторной проверки.");
             sendTo(new AID(partnerName, AID.ISLOCALNAME),
@@ -522,8 +484,7 @@ public class TouristAgent extends Agent {
             log("Свой предмет " + ownGive + " заблокирован. Запрашивает блокировку предмета партнёра.");
             sendTo(new AID(partnerName, AID.ISLOCALNAME),
                     "LOCK_PARTNER|" + transaction + "|" + ownGive + "|" + partnerGive);
-        } else if ("RECEIVER".equals(role) && waitingOwnLock) {
-            waitingOwnLock = false;
+        } else if ("RECEIVER".equals(role) && waitingPartnerLock) {
             waitingPartnerLock = false;
             log("Свой предмет " + ownGive + " заблокирован. Сообщает инициатору о готовности.");
             sendTo(new AID(partnerName, AID.ISLOCALNAME),
@@ -583,12 +544,6 @@ public class TouristAgent extends Agent {
             sendTo(new AID(partnerName, AID.ISLOCALNAME),
                     "PARTNER_TRANSFER_DONE|" + transaction + "|" + changedItem);
             waitingOwnTransfer = false;
-
-            // Важно: получатель тоже должен освободить состояние транзакции,
-            // иначе busy() навсегда останется true и он не сообщит NO_IMPROVEMENT.
-            triedPartners.add(partnerName);
-            clearExchange();
-
         } else if ("INITIATOR".equals(role)) {
             myItems.remove(ownGive);
             if (!myItems.contains(partnerGive)) myItems.add(partnerGive);
@@ -719,9 +674,7 @@ public class TouristAgent extends Agent {
         return null;
     }
 
-    // Публикация типа агента в DF — не регистрация у менеджера.
-    // Менеджер самостоятельно обнаруживает такие записи поиском DF.
-    private void registerInDF() {
+    private void register() {
         DFAgentDescription dfd = new DFAgentDescription();
         dfd.setName(getAID());
         ServiceDescription sd = new ServiceDescription();
@@ -732,8 +685,20 @@ public class TouristAgent extends Agent {
         try {
             DFService.register(this, dfd);
         } catch (FIPAException e) {
-            log("Не удалось опубликовать туриста в DF: " + e.getMessage());
+            e.printStackTrace();
         }
+
+        addBehaviour(new TickerBehaviour(this, 1000) {
+            @Override
+            protected void onTick() {
+                if (manager == null) {
+                    manager = findManager();
+                    if (manager != null) {
+                        sendTo(manager, "READY_TOURIST|" + getLocalName());
+                    }
+                }
+            }
+        });
     }
 
     private AID findManager() {
