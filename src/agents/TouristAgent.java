@@ -330,15 +330,21 @@ public class TouristAgent extends Agent {
         }
         Item y = null;
         if (ok) {
-            double bestD = Double.MAX_VALUE;
+            // y* = argmin |W_j - y + x - W_avg| среди предметов, которые
+            // строго приближают МОЙ вес к среднему и не превышают вместимость
+            double bestD = Math.abs(w - avg);          // текущее отклонение
             for (Item it : bag.values()) {
-                double d = Math.abs(w - it.g + x.g - avg);
-                if (d < bestD) {
+                int newW = w - it.g + x.g;
+                if (newW > capacity) {
+                    continue;
+                }
+                double d = Math.abs(newW - avg);
+                if (d < bestD - 1e-9) {
                     bestD = d;
                     y = it;
                 }
             }
-            ok = y != null && (w - y.g + x.g) <= capacity;
+            ok = (y != null);                          // нет улучшающего предмета -> отказ
         }
         if (!ok) {
             System.out.println("[" + getLocalName() + "] отклонил обмен " + id + " от "

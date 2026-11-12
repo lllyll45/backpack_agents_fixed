@@ -15,7 +15,7 @@ if errorlevel 1 (
 
 echo.
 echo  Запуск сервера
-java -cp "out;lib\jade.jar" agents.Main --port 1099 --tourists 10 --items data\items.txt --capacity 12 --gui
+java -cp "out;lib\jade.jar" agents.Main --port 1099 --tourists 3 --items data\items.txt --capacity 12 --gui
 
 
 pause
