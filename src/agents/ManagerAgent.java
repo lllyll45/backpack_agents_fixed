@@ -445,9 +445,7 @@ public class ManagerAgent extends Agent {
             r.add("Максимальный вес:               " + Common.kg(max));
             r.add("Итоговый разброс F:             " + Common.kg(max - min));
         }
-        if (!initialBags.isEmpty()) {
-            r.add("Лучший достигнутый разброс:     " + Common.kg(fBest));
-        }
+
         r.add("Выполнено обменов:              " + completed);
         return r;
     }

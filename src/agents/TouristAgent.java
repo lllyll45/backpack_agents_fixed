@@ -113,7 +113,6 @@ public class TouristAgent extends Agent {
         }
     }
 
-    // ------------------------------------------------------------------ диспетчер
 
     private void handle(ACLMessage m) {
         String type = m.getOntology();

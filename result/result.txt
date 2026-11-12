@@ -1,86 +1,209 @@
-========================================================================
  РАСПРЕДЕЛЕНИЕ ПРЕДМЕТОВ МЕЖДУ ТУРИСТАМИ - РЕЗУЛЬТАТ
-========================================================================
-Дата и время:           12.11.2026 11:01:00
-Туристов (N):           3
-Предметов (M):          24
+Дата и время:           12.11.2026 19:42:13
+Туристов (N):           10
+Предметов (M):          72
 Вместимость рюкзака:    12,00 кг
-C_max = ceil(sqrt(N*M)): 9
-Причина остановки:      достигнут предел обменов без улучшения C_max = 9
+C_max = ceil(sqrt(N*M)): 27
+Причина остановки:      достигнут предел обменов без улучшения C_max = 27
 
 1. РАСПРЕДЕЛЕНИЕ ПОСЛЕ ПЕРВОГО ЭТАПА
-------------------------------------------------------------------------
-Tourist_DESKTOP-4C4ILAS_8896_1                6,35 кг
-Tourist_DESKTOP-4C4ILAS_8896_2               10,80 кг
-Tourist_DESKTOP-4C4ILAS_8896_3                9,45 кг
-------------------------------------------------------------------------
-Средний вес W_avg: 8,87 кг,  начальный разброс F0: 4,45 кг
+Tourist_DESKTOP-4C4ILAS_18512_1               5,35 кг
+Tourist_DESKTOP-4C4ILAS_18512_10             11,80 кг
+Tourist_DESKTOP-4C4ILAS_18512_2              10,30 кг
+Tourist_DESKTOP-4C4ILAS_18512_3               9,60 кг
+Tourist_DESKTOP-4C4ILAS_18512_4              11,65 кг
+Tourist_DESKTOP-4C4ILAS_18512_5              11,80 кг
+Tourist_DESKTOP-4C4ILAS_18512_6               7,00 кг
+Tourist_DESKTOP-4C4ILAS_18512_7               2,40 кг
+Tourist_DESKTOP-4C4ILAS_18512_8               7,00 кг
+Tourist_DESKTOP-4C4ILAS_18512_9               2,90 кг
+Средний вес W_avg: 7,98 кг,  начальный разброс F0: 9,40 кг
 
 2. ЖУРНАЛ ОБМЕНОВ
-------------------------------------------------------------------------
    № | Участники (вес после обмена)                                 | F         | F_best    | C
-   1 | Tourist_DESKTOP-4C4ILAS_8896_3 (9,25 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_1 (6,55 кг) | 4,25 кг   | 4,25 кг   | 0
-   2 | Tourist_DESKTOP-4C4ILAS_8896_1 (7,80 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_2 (9,55 кг) | 1,75 кг   | 1,75 кг   | 0
-   3 | Tourist_DESKTOP-4C4ILAS_8896_3 (8,95 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_1 (8,10 кг) | 1,45 кг   | 1,45 кг   | 0
-   4 | Tourist_DESKTOP-4C4ILAS_8896_1 (7,55 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_3 (9,50 кг) | 2,00 кг   | 1,45 кг   | 1
-   5 | Tourist_DESKTOP-4C4ILAS_8896_1 (8,00 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_2 (9,10 кг) | 1,50 кг   | 1,45 кг   | 2
-   6 | Tourist_DESKTOP-4C4ILAS_8896_2 (8,90 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_1 (8,20 кг) | 1,30 кг   | 1,30 кг   | 0
-   7 | Tourist_DESKTOP-4C4ILAS_8896_1 (7,55 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_2 (9,55 кг) | 2,00 кг   | 1,30 кг   | 1
-   8 | Tourist_DESKTOP-4C4ILAS_8896_1 (8,10 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_3 (8,95 кг) | 1,45 кг   | 1,30 кг   | 2
-   9 | Tourist_DESKTOP-4C4ILAS_8896_2 (8,65 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_1 (9,00 кг) | 0,35 кг   | 0,35 кг   | 0
-  10 | Tourist_DESKTOP-4C4ILAS_8896_2 (8,85 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_1 (8,80 кг) | 0,15 кг   | 0,15 кг   | 0
-  11 | Tourist_DESKTOP-4C4ILAS_8896_3 (9,05 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_1 (8,70 кг) | 0,35 кг   | 0,15 кг   | 1
-  12 | Tourist_DESKTOP-4C4ILAS_8896_3 (8,90 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_2 (9,00 кг) | 0,30 кг   | 0,15 кг   | 2
-  13 | Tourist_DESKTOP-4C4ILAS_8896_3 (8,95 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_1 (8,65 кг) | 0,35 кг   | 0,15 кг   | 3
-  14 | Tourist_DESKTOP-4C4ILAS_8896_1 (8,80 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_2 (8,85 кг) | 0,15 кг   | 0,15 кг   | 4
-  15 | Tourist_DESKTOP-4C4ILAS_8896_3 (8,90 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_2 (8,90 кг) | 0,10 кг   | 0,10 кг   | 0
-  16 | Tourist_DESKTOP-4C4ILAS_8896_3 (9,05 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_1 (8,65 кг) | 0,40 кг   | 0,10 кг   | 1
-  17 | Tourist_DESKTOP-4C4ILAS_8896_1 (8,40 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_3 (9,30 кг) | 0,90 кг   | 0,10 кг   | 2
-  18 | Tourist_DESKTOP-4C4ILAS_8896_1 (8,70 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_2 (8,60 кг) | 0,70 кг   | 0,10 кг   | 3
-  19 | Tourist_DESKTOP-4C4ILAS_8896_3 (9,20 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_1 (8,80 кг) | 0,60 кг   | 0,10 кг   | 4
-  20 | Tourist_DESKTOP-4C4ILAS_8896_3 (9,30 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_1 (8,70 кг) | 0,70 кг   | 0,10 кг   | 5
-  21 | Tourist_DESKTOP-4C4ILAS_8896_2 (8,85 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_3 (9,05 кг) | 0,35 кг   | 0,10 кг   | 6
-  22 | Tourist_DESKTOP-4C4ILAS_8896_3 (8,90 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_2 (9,00 кг) | 0,30 кг   | 0,10 кг   | 7
-  23 | Tourist_DESKTOP-4C4ILAS_8896_1 (8,35 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_3 (9,25 кг) | 0,90 кг   | 0,10 кг   | 8
-  24 | Tourist_DESKTOP-4C4ILAS_8896_1 (8,80 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_2 (8,55 кг) | 0,70 кг   | 0,10 кг   | 9
-  25 | Tourist_DESKTOP-4C4ILAS_8896_1 (8,60 кг) <-> Tourist_DESKTOP-4C4ILAS_8896_3 (9,45 кг) | 0,90 кг   | 0,10 кг   | 10
+   1 | Tourist_DESKTOP-4C4ILAS_18512_4 (9,70 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_1 (7,30 кг) | 9,40 кг   | 9,40 кг   | 1
+   2 | Tourist_DESKTOP-4C4ILAS_18512_4 (8,40 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_9 (4,20 кг) | 9,40 кг   | 9,40 кг   | 2
+   3 | Tourist_DESKTOP-4C4ILAS_18512_9 (4,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (8,90 кг) | 9,40 кг   | 9,40 кг   | 3
+   4 | Tourist_DESKTOP-4C4ILAS_18512_5 (10,20 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (4,00 кг) | 7,80 кг   | 7,80 кг   | 0
+   5 | Tourist_DESKTOP-4C4ILAS_18512_2 (8,35 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_1 (9,25 кг) | 7,80 кг   | 7,80 кг   | 1
+   6 | Tourist_DESKTOP-4C4ILAS_18512_4 (8,00 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (7,40 кг) | 7,80 кг   | 7,80 кг   | 2
+   7 | Tourist_DESKTOP-4C4ILAS_18512_3 (7,20 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_9 (6,60 кг) | 7,80 кг   | 7,80 кг   | 3
+   8 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (8,70 кг) | 7,80 кг   | 7,80 кг   | 4
+   9 | Tourist_DESKTOP-4C4ILAS_18512_5 (8,55 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (8,85 кг) | 7,80 кг   | 7,80 кг   | 5
+  10 | Tourist_DESKTOP-4C4ILAS_18512_1 (9,05 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_10 (10,70 кг) | 6,70 кг   | 6,70 кг   | 0
+  11 | Tourist_DESKTOP-4C4ILAS_18512_4 (8,05 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (3,95 кг) | 6,75 кг   | 6,70 кг   | 1
+  12 | Tourist_DESKTOP-4C4ILAS_18512_8 (7,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_6 (7,80 кг) | 6,75 кг   | 6,70 кг   | 2
+  13 | Tourist_DESKTOP-4C4ILAS_18512_8 (8,00 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (8,75 кг) | 6,75 кг   | 6,70 кг   | 3
+  14 | Tourist_DESKTOP-4C4ILAS_18512_9 (5,40 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_2 (9,55 кг) | 6,75 кг   | 6,70 кг   | 4
+  15 | Tourist_DESKTOP-4C4ILAS_18512_9 (5,10 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (8,30 кг) | 6,75 кг   | 6,70 кг   | 5
+  16 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,85 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_6 (9,00 кг) | 6,75 кг   | 6,70 кг   | 6
+  17 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,80 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (8,10 кг) | 6,75 кг   | 6,70 кг   | 7
+  18 | Tourist_DESKTOP-4C4ILAS_18512_3 (8,00 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (4,70 кг) | 6,00 кг   | 6,00 кг   | 0
+  19 | Tourist_DESKTOP-4C4ILAS_18512_10 (8,80 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_9 (7,00 кг) | 4,85 кг   | 4,85 кг   | 0
+  20 | Tourist_DESKTOP-4C4ILAS_18512_5 (8,00 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_1 (8,35 кг) | 4,85 кг   | 4,85 кг   | 1
+  21 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,45 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (5,60 кг) | 3,95 кг   | 3,95 кг   | 0
+  22 | Tourist_DESKTOP-4C4ILAS_18512_7 (4,60 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (9,30 кг) | 4,95 кг   | 3,95 кг   | 1
+  23 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,35 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (8,20 кг) | 4,95 кг   | 3,95 кг   | 2
+  24 | Tourist_DESKTOP-4C4ILAS_18512_8 (7,80 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_9 (8,50 кг) | 4,95 кг   | 3,95 кг   | 3
+  25 | Tourist_DESKTOP-4C4ILAS_18512_7 (4,30 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (8,50 кг) | 5,25 кг   | 3,95 кг   | 4
+  26 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_10 (8,20 кг) | 5,25 кг   | 3,95 кг   | 5
+  27 | Tourist_DESKTOP-4C4ILAS_18512_9 (7,30 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (9,00 кг) | 5,25 кг   | 3,95 кг   | 6
+  28 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,80 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (8,15 кг) | 5,25 кг   | 3,95 кг   | 7
+  29 | Tourist_DESKTOP-4C4ILAS_18512_6 (8,10 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (5,20 кг) | 4,35 кг   | 3,95 кг   | 8
+  30 | Tourist_DESKTOP-4C4ILAS_18512_9 (7,40 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (8,05 кг) | 4,35 кг   | 3,95 кг   | 9
+  31 | Tourist_DESKTOP-4C4ILAS_18512_5 (7,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_1 (7,90 кг) | 4,35 кг   | 3,95 кг   | 10
+  32 | Tourist_DESKTOP-4C4ILAS_18512_9 (6,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (9,00 кг) | 4,35 кг   | 3,95 кг   | 11
+  33 | Tourist_DESKTOP-4C4ILAS_18512_7 (4,30 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_6 (9,00 кг) | 5,25 кг   | 3,95 кг   | 12
+  34 | Tourist_DESKTOP-4C4ILAS_18512_4 (8,00 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_1 (8,90 кг) | 5,25 кг   | 3,95 кг   | 13
+  35 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (5,30 кг) | 4,25 кг   | 3,95 кг   | 14
+  36 | Tourist_DESKTOP-4C4ILAS_18512_6 (8,05 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_5 (8,85 кг) | 4,25 кг   | 3,95 кг   | 15
+  37 | Tourist_DESKTOP-4C4ILAS_18512_9 (7,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (8,00 кг) | 4,25 кг   | 3,95 кг   | 16
+  38 | Tourist_DESKTOP-4C4ILAS_18512_7 (4,30 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_10 (9,20 кг) | 5,25 кг   | 3,95 кг   | 17
+  39 | Tourist_DESKTOP-4C4ILAS_18512_1 (8,20 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_2 (9,25 кг) | 4,95 кг   | 3,95 кг   | 18
+  40 | Tourist_DESKTOP-4C4ILAS_18512_7 (5,20 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_5 (7,95 кг) | 4,05 кг   | 3,95 кг   | 19
+  41 | Tourist_DESKTOP-4C4ILAS_18512_7 (5,30 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_2 (9,15 кг) | 3,90 кг   | 3,90 кг   | 0
+  42 | Tourist_DESKTOP-4C4ILAS_18512_9 (7,60 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_10 (9,50 кг) | 4,20 кг   | 3,90 кг   | 1
+  43 | Tourist_DESKTOP-4C4ILAS_18512_9 (6,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (8,70 кг) | 4,20 кг   | 3,90 кг   | 2
+  44 | Tourist_DESKTOP-4C4ILAS_18512_2 (7,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_5 (9,20 кг) | 4,20 кг   | 3,90 кг   | 3
+  45 | Tourist_DESKTOP-4C4ILAS_18512_2 (8,20 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (7,75 кг) | 4,20 кг   | 3,90 кг   | 4
+  46 | Tourist_DESKTOP-4C4ILAS_18512_7 (5,30 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (8,70 кг) | 4,20 кг   | 3,90 кг   | 5
+  47 | Tourist_DESKTOP-4C4ILAS_18512_5 (8,10 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_9 (8,00 кг) | 4,20 кг   | 3,90 кг   | 6
+  48 | Tourist_DESKTOP-4C4ILAS_18512_4 (7,85 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (7,90 кг) | 4,20 кг   | 3,90 кг   | 7
+  49 | Tourist_DESKTOP-4C4ILAS_18512_2 (7,70 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (5,80 кг) | 3,70 кг   | 3,70 кг   | 0
+  50 | Tourist_DESKTOP-4C4ILAS_18512_6 (8,05 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (7,85 кг) | 3,70 кг   | 3,70 кг   | 1
+  51 | Tourist_DESKTOP-4C4ILAS_18512_7 (5,30 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (9,20 кг) | 4,20 кг   | 3,70 кг   | 2
+  52 | Tourist_DESKTOP-4C4ILAS_18512_5 (8,00 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (8,00 кг) | 4,20 кг   | 3,70 кг   | 3
+  53 | Tourist_DESKTOP-4C4ILAS_18512_5 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_2 (7,75 кг) | 4,20 кг   | 3,70 кг   | 4
+  54 | Tourist_DESKTOP-4C4ILAS_18512_5 (8,05 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_10 (9,40 кг) | 4,10 кг   | 3,70 кг   | 5
+  55 | Tourist_DESKTOP-4C4ILAS_18512_4 (8,10 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (7,75 кг) | 4,10 кг   | 3,70 кг   | 6
+  56 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,70 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (5,80 кг) | 3,60 кг   | 3,60 кг   | 0
+  57 | Tourist_DESKTOP-4C4ILAS_18512_8 (7,80 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_2 (9,15 кг) | 3,60 кг   | 3,60 кг   | 1
+  58 | Tourist_DESKTOP-4C4ILAS_18512_7 (4,50 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (9,40 кг) | 4,90 кг   | 3,60 кг   | 2
+  59 | Tourist_DESKTOP-4C4ILAS_18512_9 (6,80 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (5,70 кг) | 3,70 кг   | 3,60 кг   | 3
+  60 | Tourist_DESKTOP-4C4ILAS_18512_5 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_1 (7,80 кг) | 3,70 кг   | 3,60 кг   | 4
+  61 | Tourist_DESKTOP-4C4ILAS_18512_10 (8,20 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (9,00 кг) | 3,70 кг   | 3,60 кг   | 5
+  62 | Tourist_DESKTOP-4C4ILAS_18512_5 (8,05 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (9,30 кг) | 3,60 кг   | 3,60 кг   | 6
+  63 | Tourist_DESKTOP-4C4ILAS_18512_10 (7,80 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (6,10 кг) | 3,20 кг   | 3,20 кг   | 0
+  64 | Tourist_DESKTOP-4C4ILAS_18512_2 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_9 (8,00 кг) | 3,20 кг   | 3,20 кг   | 1
+  65 | Tourist_DESKTOP-4C4ILAS_18512_9 (6,55 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (9,20 кг) | 3,20 кг   | 3,20 кг   | 2
+  66 | Tourist_DESKTOP-4C4ILAS_18512_6 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_10 (7,90 кг) | 3,20 кг   | 3,20 кг   | 3
+  67 | Tourist_DESKTOP-4C4ILAS_18512_2 (7,70 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_5 (8,30 кг) | 3,20 кг   | 3,20 кг   | 4
+  68 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (9,20 кг) | 3,10 кг   | 3,10 кг   | 0
+  69 | Tourist_DESKTOP-4C4ILAS_18512_7 (5,30 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (10,00 кг) | 4,70 кг   | 3,10 кг   | 1
+  70 | Tourist_DESKTOP-4C4ILAS_18512_6 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (9,20 кг) | 4,70 кг   | 3,10 кг   | 2
+  71 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_5 (8,30 кг) | 4,70 кг   | 3,10 кг   | 3
+  72 | Tourist_DESKTOP-4C4ILAS_18512_5 (8,00 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (5,60 кг) | 4,40 кг   | 3,10 кг   | 4
+  73 | Tourist_DESKTOP-4C4ILAS_18512_7 (6,10 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (9,50 кг) | 3,40 кг   | 3,10 кг   | 5
+  74 | Tourist_DESKTOP-4C4ILAS_18512_3 (7,85 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_9 (7,90 кг) | 3,40 кг   | 3,10 кг   | 6
+  75 | Tourist_DESKTOP-4C4ILAS_18512_5 (8,40 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (5,70 кг) | 3,80 кг   | 3,10 кг   | 7
+  76 | Tourist_DESKTOP-4C4ILAS_18512_9 (7,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_4 (9,50 кг) | 3,80 кг   | 3,10 кг   | 8
+  77 | Tourist_DESKTOP-4C4ILAS_18512_8 (7,75 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_2 (8,95 кг) | 3,80 кг   | 3,10 кг   | 9
+  78 | Tourist_DESKTOP-4C4ILAS_18512_5 (9,60 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (4,50 кг) | 5,10 кг   | 3,10 кг   | 10
+  79 | Tourist_DESKTOP-4C4ILAS_18512_2 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_10 (8,90 кг) | 5,10 кг   | 3,10 кг   | 11
+  80 | Tourist_DESKTOP-4C4ILAS_18512_9 (8,00 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_5 (9,50 кг) | 5,00 кг   | 3,10 кг   | 12
+  81 | Tourist_DESKTOP-4C4ILAS_18512_4 (8,10 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_1 (9,30 кг) | 5,00 кг   | 3,10 кг   | 13
+  82 | Tourist_DESKTOP-4C4ILAS_18512_3 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_10 (8,80 кг) | 5,00 кг   | 3,10 кг   | 14
+  83 | Tourist_DESKTOP-4C4ILAS_18512_1 (8,00 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_7 (5,80 кг) | 3,70 кг   | 3,10 кг   | 15
+  84 | Tourist_DESKTOP-4C4ILAS_18512_4 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_6 (8,10 кг) | 3,70 кг   | 3,10 кг   | 16
+  85 | Tourist_DESKTOP-4C4ILAS_18512_9 (6,60 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_2 (9,35 кг) | 3,70 кг   | 3,10 кг   | 17
+  86 | Tourist_DESKTOP-4C4ILAS_18512_2 (7,90 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_8 (9,20 кг) | 3,70 кг   | 3,10 кг   | 18
+  87 | Tourist_DESKTOP-4C4ILAS_18512_7 (4,30 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_6 (9,60 кг) | 5,30 кг   | 3,10 кг   | 19
+  88 | Tourist_DESKTOP-4C4ILAS_18512_2 (7,85 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_1 (8,05 кг) | 5,30 кг   | 3,10 кг   | 20
+  89 | Tourist_DESKTOP-4C4ILAS_18512_1 (7,75 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (8,25 кг) | 5,30 кг   | 3,10 кг   | 21
+  90 | Tourist_DESKTOP-4C4ILAS_18512_4 (8,05 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_10 (8,70 кг) | 5,30 кг   | 3,10 кг   | 22
+  91 | Tourist_DESKTOP-4C4ILAS_18512_7 (5,60 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_5 (8,20 кг) | 4,00 кг   | 3,10 кг   | 23
+  92 | Tourist_DESKTOP-4C4ILAS_18512_9 (8,10 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_6 (8,10 кг) | 3,60 кг   | 3,10 кг   | 24
+  93 | Tourist_DESKTOP-4C4ILAS_18512_9 (6,55 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_2 (9,40 кг) | 3,80 кг   | 3,10 кг   | 25
+  94 | Tourist_DESKTOP-4C4ILAS_18512_7 (4,55 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_3 (9,30 кг) | 4,85 кг   | 3,10 кг   | 26
+  95 | Tourist_DESKTOP-4C4ILAS_18512_3 (7,95 кг) <-> Tourist_DESKTOP-4C4ILAS_18512_1 (9,10 кг) | 4,85 кг   | 3,10 кг   | 27
 
 3. ИТОГОВОЕ СОДЕРЖИМОЕ РЮКЗАКОВ
-------------------------------------------------------------------------
-Tourist_DESKTOP-4C4ILAS_8896_1  -  8,60 кг
+Tourist_DESKTOP-4C4ILAS_18512_1  -  9,10 кг
+      * Газовая горелка (0,80 кг)
+      * Термос (0,80 кг)
+      * Палатка (3,20 кг)
+      * Аптечка (0,70 кг)
+      * Газовая горелка (0,80 кг)
       * Топор (1,30 кг)
+      * Консервы (1,50 кг)
+Tourist_DESKTOP-4C4ILAS_18512_10  -  8,70 кг
+      * Аптечка (0,70 кг)
+      * Верёвка (0,60 кг)
       * Продукты на перекус (1,00 кг)
       * Котелок (1,20 кг)
       * Сменная одежда (1,40 кг)
-      * Ботинки запасные (1,70 кг)
       * Тент (1,60 кг)
-      * Power bank (0,40 кг)
-Tourist_DESKTOP-4C4ILAS_8896_2  -  8,55 кг
-      * Тёплая куртка (1,10 кг)
-      * Туристический коврик (0,90 кг)
-      * Набор посуды (0,90 кг)
-      * Палатка (3,20 кг)
-      * Термос (0,80 кг)
+      * Фонарик (0,30 кг)
+      * Котелок (1,20 кг)
       * Аптечка (0,70 кг)
-      * Газовая горелка (0,80 кг)
-      * Спички и зажигалка (0,15 кг)
-Tourist_DESKTOP-4C4ILAS_8896_3  -  9,45 кг
-      * Спальный мешок (2,10 кг)
+Tourist_DESKTOP-4C4ILAS_18512_2  -  9,40 кг
+      * Набор посуды (0,90 кг)
+      * Верёвка (0,60 кг)
       * Крупы и макароны (1,80 кг)
+      * Верёвка (0,60 кг)
+      * Набор посуды (0,90 кг)
+      * Тёплая куртка (1,10 кг)
+      * Сменная одежда (1,40 кг)
+      * Power bank (0,40 кг)
+      * Ботинки запасные (1,70 кг)
+Tourist_DESKTOP-4C4ILAS_18512_3  -  7,95 кг
+      * Туристический коврик (0,90 кг)
+      * Крупы и макароны (1,80 кг)
+      * Термос (0,80 кг)
+      * Газовый баллон (0,45 кг)
+      * Набор посуды (0,90 кг)
+      * Тент (1,60 кг)
+      * Туристический коврик (0,90 кг)
+      * Газовый баллон (0,45 кг)
+      * Спички и зажигалка (0,15 кг)
+Tourist_DESKTOP-4C4ILAS_18512_4  -  8,05 кг
+      * Туристический коврик (0,90 кг)
+      * Тёплая куртка (1,10 кг)
+      * Дождевик (0,50 кг)
+      * Продукты на перекус (1,00 кг)
+      * Power bank (0,40 кг)
+      * Power bank (0,40 кг)
+      * Топор (1,30 кг)
+      * Консервы (1,50 кг)
+      * Спички и зажигалка (0,15 кг)
+      * Термос (0,80 кг)
+Tourist_DESKTOP-4C4ILAS_18512_5  -  8,20 кг
+      * Топор (1,30 кг)
+      * Тёплая куртка (1,10 кг)
+      * Дождевик (0,50 кг)
+      * Карта и компас (0,20 кг)
+      * Сменная одежда (1,40 кг)
+      * Фонарик (0,30 кг)
+      * Котелок (1,20 кг)
       * Запас воды (2,00 кг)
+      * Карта и компас (0,20 кг)
+Tourist_DESKTOP-4C4ILAS_18512_6  -  8,10 кг
+      * Дождевик (0,50 кг)
+      * Запас воды (2,00 кг)
+      * Газовая горелка (0,80 кг)
+      * Крупы и макароны (1,80 кг)
+      * Продукты на перекус (1,00 кг)
       * Консервы (1,50 кг)
       * Фонарик (0,30 кг)
       * Карта и компас (0,20 кг)
+Tourist_DESKTOP-4C4ILAS_18512_7  -  4,55 кг
+      * Спальный мешок (2,10 кг)
+      * Запас воды (2,00 кг)
       * Газовый баллон (0,45 кг)
-      * Дождевик (0,50 кг)
-      * Верёвка (0,60 кг)
+Tourist_DESKTOP-4C4ILAS_18512_8  -  9,20 кг
+      * Спальный мешок (2,10 кг)
+      * Ботинки запасные (1,70 кг)
+      * Спальный мешок (2,10 кг)
+      * Ботинки запасные (1,70 кг)
+      * Тент (1,60 кг)
+Tourist_DESKTOP-4C4ILAS_18512_9  -  6,55 кг
+      * Палатка (3,20 кг)
+      * Палатка (3,20 кг)
+      * Спички и зажигалка (0,15 кг)
 
 4. ИТОГОВЫЕ ПОКАЗАТЕЛИ
-------------------------------------------------------------------------
-Средний вес рюкзака:            8,87 кг
-Минимальный вес:                8,55 кг
-Максимальный вес:               9,45 кг
-Итоговый разброс F:             0,90 кг
-Лучший достигнутый разброс:     0,10 кг
-Выполнено обменов:              25
-========================================================================
+Средний вес рюкзака:            7,98 кг
+Минимальный вес:                4,55 кг
+Максимальный вес:               9,40 кг
+Итоговый разброс F:             4,85 кг
+Выполнено обменов:              95
