@@ -137,7 +137,7 @@ public class ManagerAgent extends Agent {
                     items.put(sender, owned);
                     nOwned += owned ? 1 : -1;
                     lastProgress = now;
-                    System.out.println("[manager] " + sender + " → " + (owned ? "OWNED" : "NOT_OWNED")
+                    System.out.println("[manager] " + sender + (owned ? " OWNED" : " NOT_OWNED")
                             + " (N_owned=" + nOwned + "/" + items.size() + ")");
                 }
                 break;
@@ -380,12 +380,8 @@ public class ManagerAgent extends Agent {
     }
 
     private List<String> buildReport() {
-        String line = "========================================================================";
-        String thin = "------------------------------------------------------------------------";
         List<String> r = new ArrayList<>();
-        r.add(line);
         r.add(" РАСПРЕДЕЛЕНИЕ ПРЕДМЕТОВ МЕЖДУ ТУРИСТАМИ - РЕЗУЛЬТАТ");
-        r.add(line);
         r.add("Дата и время:           " + new SimpleDateFormat("dd.MM.yyyy HH:mm:ss").format(new Date()));
         r.add("Туристов (N):           " + tourists.size());
         r.add("Предметов (M):          " + items.size());
@@ -395,20 +391,18 @@ public class ManagerAgent extends Agent {
         r.add("");
 
         r.add("1. РАСПРЕДЕЛЕНИЕ ПОСЛЕ ПЕРВОГО ЭТАПА");
-        r.add(thin);
         if (initialBags.isEmpty()) {
             r.add("(первый этап не завершён)");
         } else {
             for (Map.Entry<String, Integer> e : initialBags.entrySet()) {
                 r.add(String.format("%-40s %12s", e.getKey(), Common.kg(e.getValue())));
             }
-            r.add(thin);
+
             r.add("Средний вес W_avg: " + Common.kg(avg) + ",  начальный разброс F0: " + Common.kg(f0));
         }
         r.add("");
 
         r.add("2. ЖУРНАЛ ОБМЕНОВ");
-        r.add(thin);
         if (exchangeLog.isEmpty()) {
             r.add("(обменов не было)");
         } else {
@@ -419,7 +413,6 @@ public class ManagerAgent extends Agent {
         r.add("");
 
         r.add("3. ИТОГОВОЕ СОДЕРЖИМОЕ РЮКЗАКОВ");
-        r.add(thin);
         int min = Integer.MAX_VALUE;
         int max = Integer.MIN_VALUE;
         long sum = 0;
@@ -446,7 +439,6 @@ public class ManagerAgent extends Agent {
         r.add("");
 
         r.add("4. ИТОГОВЫЕ ПОКАЗАТЕЛИ");
-        r.add(thin);
         if (!finals.isEmpty() && min != Integer.MAX_VALUE) {
             r.add("Средний вес рюкзака:            " + Common.kg(sum / (double) finals.size()));
             r.add("Минимальный вес:                " + Common.kg(min));
@@ -457,7 +449,6 @@ public class ManagerAgent extends Agent {
             r.add("Лучший достигнутый разброс:     " + Common.kg(fBest));
         }
         r.add("Выполнено обменов:              " + completed);
-        r.add(line);
         return r;
     }
 
