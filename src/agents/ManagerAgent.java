@@ -71,7 +71,8 @@ public class ManagerAgent extends Agent {
     private double avg;
     private int f0;
     private int lastF;       // разброс после предыдущего обмена
-    private int noImprove;   // обмены подряд без уменьшения F
+    private int minF;        // минимальный F за всю балансировку (антизацикливание)
+    private int noImprove;   // обмены подряд без нового минимума F
     private int worsenStreak; // обмены подряд с ростом F
     private int cMax;
     private int wMax;        // лимит ростов F подряд
@@ -302,6 +303,7 @@ public class ManagerAgent extends Agent {
         avg = sum / (double) bags.size();
         f0 = spread();
         lastF = f0;
+        minF = f0;
         noImprove = 0;
         worsenStreak = 0;
         cMax = (int) Math.ceil(Math.sqrt((double) tourists.size() * items.size()));
@@ -341,8 +343,10 @@ public class ManagerAgent extends Agent {
         lastExchange = now;
 
         int f = spread();
-        if (f < lastF) {
-            // F уменьшился — улучшение
+        // C сбрасывается только при НОВОМ минимуме F за всё время.
+        // Иначе пара туристов может бесконечно гонять одни предметы (F: 0.30↔0.50).
+        if (f < minF) {
+            minF = f;
             noImprove = 0;
             worsenStreak = 0;
         } else {
@@ -350,7 +354,7 @@ public class ManagerAgent extends Agent {
             if (f > lastF) {
                 worsenStreak++;
             } else {
-                worsenStreak = 0; // F не изменился
+                worsenStreak = 0;
             }
         }
         lastF = f;
@@ -373,7 +377,8 @@ public class ManagerAgent extends Agent {
             } else if (worsenStreak >= wMax) {
                 beginStop("разброс растёт W_max = " + wMax + " обменов подряд (F=" + Common.kg(f) + ")", now);
             } else if (noImprove >= cMax) {
-                beginStop("достигнут предел обменов без уменьшения F: C_max = " + cMax, now);
+                beginStop("достигнут предел обменов без нового минимума F: C_max = " + cMax
+                        + " (min F=" + Common.kg(minF) + ")", now);
             }
         }
     }
@@ -493,6 +498,9 @@ public class ManagerAgent extends Agent {
             r.add("Минимальный вес:                " + Common.kg(min));
             r.add("Максимальный вес:               " + Common.kg(max));
             r.add("Итоговый разброс F:             " + Common.kg(max - min));
+        }
+        if (minF > 0 || completed > 0) {
+            r.add("Минимальный F за балансировку:  " + Common.kg(minF));
         }
         r.add("Выполнено обменов:              " + completed);
         r.add(line);
