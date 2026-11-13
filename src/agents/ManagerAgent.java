@@ -35,6 +35,8 @@ public class ManagerAgent extends Agent {
 
     /** Тишина после последней регистрации предмета, после которой регистрация считается завершённой. */
     private static final long REG_SILENCE = 5000;
+    /** Тишина после появления последнего туриста: если за это время никто новый не подключился — начинаем. */
+    private static final long TOURIST_SILENCE = 5000;
     /** Сколько ждать, если N_owned не меняется, прежде чем признать первый этап невыполнимым. */
     private static final long STAGE1_STALL = 30000;
     /** Сколько N_owned должно держаться равным N_total, чтобы исключить гонку уведомлений. */
@@ -43,9 +45,10 @@ public class ManagerAgent extends Agent {
     private static final long IDLE_STOP = 20000;
     private static final long FINAL_WAIT = 30000;
 
-    private int expected;
+    private int expected;   // 0 = ждать туристов автоматически (по тишине)
     private int capacity;
     private String resultPath;
+    private long lastTouristJoin;
 
     private Phase phase = Phase.REGISTRATION;
 
@@ -68,8 +71,10 @@ public class ManagerAgent extends Agent {
     private double avg;
     private int f0;
     private int fBest;
-    private int noImprove;   // счётчик C
+    private int noImprove;   // счётчик C: обмены подряд без нового F_best
+    private int worsenStreak; // обмены подряд с F > F_best
     private int cMax;
+    private int wMax;        // лимит ухудшений подряд
     private int completed;
     private long lastExchange;
 
@@ -85,9 +90,16 @@ public class ManagerAgent extends Agent {
         capacity = Integer.parseInt(a[1].toString());
         resultPath = a[2].toString();
         lastReg = System.currentTimeMillis();
+        lastTouristJoin = 0;
 
-        System.out.println("[manager] запущен. Ожидается туристов: " + expected
-                + ", вместимость рюкзака: " + Common.kg(capacity));
+        if (expected > 0) {
+            System.out.println("[manager] запущен. Ожидается туристов: " + expected
+                    + ", вместимость рюкзака: " + Common.kg(capacity));
+        } else {
+            System.out.println("[manager] запущен. Число туристов не задано — старт после тишины "
+                    + (TOURIST_SILENCE / 1000) + " с с момента последнего подключения, вместимость: "
+                    + Common.kg(capacity));
+        }
 
         addBehaviour(new CyclicBehaviour(this) {
             @Override
@@ -137,7 +149,7 @@ public class ManagerAgent extends Agent {
                     items.put(sender, owned);
                     nOwned += owned ? 1 : -1;
                     lastProgress = now;
-                    System.out.println("[manager] " + sender + (owned ? " OWNED" : " NOT_OWNED")
+                    System.out.println("[manager] " + sender + " → " + (owned ? "OWNED" : "NOT_OWNED")
                             + " (N_owned=" + nOwned + "/" + items.size() + ")");
                 }
                 break;
@@ -188,11 +200,27 @@ public class ManagerAgent extends Agent {
                     lastDfCheck = now;
                     List<AID> found = Common.findTourists(this);
                     if (found.size() != lastDfCount) {
+                        if (found.size() > lastDfCount) {
+                            lastTouristJoin = now;
+                        }
                         lastDfCount = found.size();
-                        System.out.println("[manager] подключено туристов: " + found.size() + " из " + expected);
+                        if (expected > 0) {
+                            System.out.println("[manager] подключено туристов: " + found.size() + " из " + expected);
+                        } else {
+                            System.out.println("[manager] подключено туристов: " + found.size()
+                                    + " (авто, ждём тишину " + (TOURIST_SILENCE / 1000) + " с)");
+                        }
                     }
-                    if (found.size() >= expected) {
-                        tourists = new ArrayList<>(found.subList(0, expected));
+                    if (expected > 0) {
+                        if (found.size() >= expected) {
+                            tourists = new ArrayList<>(found.subList(0, expected));
+                            startDistribution(now);
+                        }
+                    } else if (!found.isEmpty() && lastTouristJoin > 0
+                            && now - lastTouristJoin >= TOURIST_SILENCE) {
+                        tourists = new ArrayList<>(found);
+                        System.out.println("[manager] тишина " + (TOURIST_SILENCE / 1000)
+                                + " с — принимаем всех подключённых туристов: " + tourists.size());
                         startDistribution(now);
                     }
                 }
@@ -275,7 +303,10 @@ public class ManagerAgent extends Agent {
         f0 = spread();
         fBest = f0;
         noImprove = 0;
+        worsenStreak = 0;
         cMax = (int) Math.ceil(Math.sqrt((double) tourists.size() * items.size()));
+        // быстрее останавливаемся, если разброс пошёл вверх после лучшего результата
+        wMax = Math.max(3, (int) Math.ceil(cMax / 3.0));
         lastExchange = now;
 
         StringBuilder roster = new StringBuilder();
@@ -286,7 +317,7 @@ public class ManagerAgent extends Agent {
             roster.append(t.getLocalName());
         }
         System.out.println("[manager] второй этап. W_avg = " + Common.kg(avg) + ", F0 = " + Common.kg(f0)
-                + ", C_max = " + cMax);
+                + ", C_max = " + cMax + ", W_max = " + wMax);
         phase = Phase.BALANCING;
         for (AID t : tourists) {
             Common.send(this, ACLMessage.INFORM, t, Common.T_AVG, avg + "|" + roster);
@@ -314,8 +345,15 @@ public class ManagerAgent extends Agent {
         if (f < fBest) {
             fBest = f;
             noImprove = 0;
+            worsenStreak = 0;
         } else {
             noImprove++;
+            if (f > fBest) {
+                worsenStreak++;
+            } else {
+                // F == F_best: плато, не считаем ухудшением
+                worsenStreak = 0;
+            }
         }
         StringBuilder who = new StringBuilder();
         for (Map.Entry<String, Integer> e : parts.entrySet()) {
@@ -324,14 +362,19 @@ public class ManagerAgent extends Agent {
             }
             who.append(e.getKey()).append(" (").append(Common.kg(e.getValue())).append(")");
         }
-        exchangeLog.add(String.format("%4d | %-60s | %-9s | %-9s | %d",
-                completed, who, Common.kg(f), Common.kg(fBest), noImprove));
+        exchangeLog.add(String.format("%4d | %-60s | %-9s | %-9s | %d | %d",
+                completed, who, Common.kg(f), Common.kg(fBest), noImprove, worsenStreak));
         System.out.println("[manager] обмен №" + completed + ": F = " + Common.kg(f) + ", F_best = "
-                + Common.kg(fBest) + ", C = " + noImprove + "/" + cMax);
+                + Common.kg(fBest) + ", C = " + noImprove + "/" + cMax
+                + ", W = " + worsenStreak + "/" + wMax);
 
         if (phase == Phase.BALANCING) {
             if (f == 0) {
                 beginStop("достигнут идеальный баланс (F = 0)", now);
+            } else if (worsenStreak >= wMax) {
+                // новый критерий: слишком много обменов подряд ухудшают разброс относительно F_best
+                beginStop("разброс ухудшается относительно F_best: W_max = " + wMax
+                        + " (F=" + Common.kg(f) + ", F_best=" + Common.kg(fBest) + ")", now);
             } else if (noImprove >= cMax) {
                 beginStop("достигнут предел обменов без улучшения C_max = " + cMax, now);
             }
@@ -380,39 +423,47 @@ public class ManagerAgent extends Agent {
     }
 
     private List<String> buildReport() {
+        String line = "========================================================================";
+        String thin = "------------------------------------------------------------------------";
         List<String> r = new ArrayList<>();
+        r.add(line);
         r.add(" РАСПРЕДЕЛЕНИЕ ПРЕДМЕТОВ МЕЖДУ ТУРИСТАМИ - РЕЗУЛЬТАТ");
+        r.add(line);
         r.add("Дата и время:           " + new SimpleDateFormat("dd.MM.yyyy HH:mm:ss").format(new Date()));
         r.add("Туристов (N):           " + tourists.size());
         r.add("Предметов (M):          " + items.size());
         r.add("Вместимость рюкзака:    " + Common.kg(capacity));
         r.add("C_max = ceil(sqrt(N*M)): " + (cMax > 0 ? String.valueOf(cMax) : "-"));
+        r.add("W_max = max(3, ceil(C_max/3)): " + (wMax > 0 ? String.valueOf(wMax) : "-"));
         r.add("Причина остановки:      " + stopReason);
         r.add("");
 
         r.add("1. РАСПРЕДЕЛЕНИЕ ПОСЛЕ ПЕРВОГО ЭТАПА");
+        r.add(thin);
         if (initialBags.isEmpty()) {
             r.add("(первый этап не завершён)");
         } else {
             for (Map.Entry<String, Integer> e : initialBags.entrySet()) {
                 r.add(String.format("%-40s %12s", e.getKey(), Common.kg(e.getValue())));
             }
-
+            r.add(thin);
             r.add("Средний вес W_avg: " + Common.kg(avg) + ",  начальный разброс F0: " + Common.kg(f0));
         }
         r.add("");
 
         r.add("2. ЖУРНАЛ ОБМЕНОВ");
+        r.add(thin);
         if (exchangeLog.isEmpty()) {
             r.add("(обменов не было)");
         } else {
-            r.add(String.format("%4s | %-60s | %-9s | %-9s | %s", "№", "Участники (вес после обмена)",
-                    "F", "F_best", "C"));
+            r.add(String.format("%4s | %-60s | %-9s | %-9s | %s | %s", "№", "Участники (вес после обмена)",
+                    "F", "F_best", "C", "W"));
             r.addAll(exchangeLog);
         }
         r.add("");
 
         r.add("3. ИТОГОВОЕ СОДЕРЖИМОЕ РЮКЗАКОВ");
+        r.add(thin);
         int min = Integer.MAX_VALUE;
         int max = Integer.MIN_VALUE;
         long sum = 0;
@@ -439,14 +490,18 @@ public class ManagerAgent extends Agent {
         r.add("");
 
         r.add("4. ИТОГОВЫЕ ПОКАЗАТЕЛИ");
+        r.add(thin);
         if (!finals.isEmpty() && min != Integer.MAX_VALUE) {
             r.add("Средний вес рюкзака:            " + Common.kg(sum / (double) finals.size()));
             r.add("Минимальный вес:                " + Common.kg(min));
             r.add("Максимальный вес:               " + Common.kg(max));
             r.add("Итоговый разброс F:             " + Common.kg(max - min));
         }
-
+        if (!initialBags.isEmpty()) {
+            r.add("Лучший достигнутый разброс:     " + Common.kg(fBest));
+        }
         r.add("Выполнено обменов:              " + completed);
+        r.add(line);
         return r;
     }
 

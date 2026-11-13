@@ -18,8 +18,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
+ * СЕРВЕР. Создаёт главный контейнер JADE, менеджера и агентов-предметов (данные из файла).
+ * Туристы здесь не создаются - они появляются, когда подключается клиент (ClientMain).
+ *
  * Параметры (все необязательные):
- *   --tourists N      сколько туристов должно подключиться (по умолчанию 3)
+ *   --tourists N      сколько туристов ждать (необязательно; без параметра — авто по тишине)
  *   --items файл      файл с предметами (по умолчанию data/items.txt)
  *   --capacity кг     вместимость рюкзака (по умолчанию 12)
  *   --result файл     файл результата (по умолчанию result/result.txt)
@@ -31,7 +34,7 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         Map<String, String> o = Common.parseArgs(args);
-        int tourists = Integer.parseInt(o.getOrDefault("tourists", "3"));
+        int tourists = Integer.parseInt(o.getOrDefault("tourists", "0")); // 0 = авто (по тишине подключения)
         String itemsFile = o.getOrDefault("items", "data/items.txt");
         int capacity = Common.toGrams(o.getOrDefault("capacity", "12"));
         String resultFile = o.getOrDefault("result", "result/result.txt");
@@ -52,7 +55,7 @@ public class Main {
                 return;
             }
         }
-        if (total > (long) tourists * capacity) {
+        if (tourists > 0 && total > (long) tourists * capacity) {
             System.out.println("Суммарная масса предметов " + Common.kg(total) + " больше общей вместимости "
                     + tourists + " рюкзаков (" + Common.kg((long) tourists * capacity) + "). Увеличьте --tourists.");
             return;
@@ -74,7 +77,7 @@ public class Main {
 
         printAddresses(port);
         System.out.println("Предметов в файле: " + items.size() + ", общая масса " + Common.kg(total)
-                + ". Ждём подключения туристов: " + tourists);
+                + (tourists > 0 ? ". Ждём подключения туристов: " + tourists : ". Число туристов не задано — старт по тишине подключения"));
 
         // менеджер создаётся первым, чтобы предметам было кому регистрироваться
         main.createNewAgent(Common.MANAGER, ManagerAgent.class.getName(),
