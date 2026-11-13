@@ -70,11 +70,11 @@ public class ManagerAgent extends Agent {
     private final List<String> exchangeLog = new ArrayList<>();
     private double avg;
     private int f0;
-    private int fBest;
-    private int noImprove;   // счётчик C: обмены подряд без нового F_best
-    private int worsenStreak; // обмены подряд с F > F_best
+    private int lastF;       // разброс после предыдущего обмена
+    private int noImprove;   // обмены подряд без уменьшения F
+    private int worsenStreak; // обмены подряд с ростом F
     private int cMax;
-    private int wMax;        // лимит ухудшений подряд
+    private int wMax;        // лимит ростов F подряд
     private int completed;
     private long lastExchange;
 
@@ -301,11 +301,10 @@ public class ManagerAgent extends Agent {
         }
         avg = sum / (double) bags.size();
         f0 = spread();
-        fBest = f0;
+        lastF = f0;
         noImprove = 0;
         worsenStreak = 0;
         cMax = (int) Math.ceil(Math.sqrt((double) tourists.size() * items.size()));
-        // быстрее останавливаемся, если разброс пошёл вверх после лучшего результата
         wMax = Math.max(3, (int) Math.ceil(cMax / 3.0));
         lastExchange = now;
 
@@ -342,19 +341,19 @@ public class ManagerAgent extends Agent {
         lastExchange = now;
 
         int f = spread();
-        if (f < fBest) {
-            fBest = f;
+        if (f < lastF) {
+            // F уменьшился — улучшение
             noImprove = 0;
             worsenStreak = 0;
         } else {
             noImprove++;
-            if (f > fBest) {
+            if (f > lastF) {
                 worsenStreak++;
             } else {
-                // F == F_best: плато, не считаем ухудшением
-                worsenStreak = 0;
+                worsenStreak = 0; // F не изменился
             }
         }
+        lastF = f;
         StringBuilder who = new StringBuilder();
         for (Map.Entry<String, Integer> e : parts.entrySet()) {
             if (who.length() > 0) {
@@ -362,21 +361,19 @@ public class ManagerAgent extends Agent {
             }
             who.append(e.getKey()).append(" (").append(Common.kg(e.getValue())).append(")");
         }
-        exchangeLog.add(String.format("%4d | %-60s | %-9s | %-9s | %d | %d",
-                completed, who, Common.kg(f), Common.kg(fBest), noImprove, worsenStreak));
-        System.out.println("[manager] обмен №" + completed + ": F = " + Common.kg(f) + ", F_best = "
-                + Common.kg(fBest) + ", C = " + noImprove + "/" + cMax
+        exchangeLog.add(String.format("%4d | %-60s | %-9s | %d | %d",
+                completed, who, Common.kg(f), noImprove, worsenStreak));
+        System.out.println("[manager] обмен №" + completed + ": F = " + Common.kg(f)
+                + ", C = " + noImprove + "/" + cMax
                 + ", W = " + worsenStreak + "/" + wMax);
 
         if (phase == Phase.BALANCING) {
             if (f == 0) {
                 beginStop("достигнут идеальный баланс (F = 0)", now);
             } else if (worsenStreak >= wMax) {
-                // новый критерий: слишком много обменов подряд ухудшают разброс относительно F_best
-                beginStop("разброс ухудшается относительно F_best: W_max = " + wMax
-                        + " (F=" + Common.kg(f) + ", F_best=" + Common.kg(fBest) + ")", now);
+                beginStop("разброс растёт W_max = " + wMax + " обменов подряд (F=" + Common.kg(f) + ")", now);
             } else if (noImprove >= cMax) {
-                beginStop("достигнут предел обменов без улучшения C_max = " + cMax, now);
+                beginStop("достигнут предел обменов без уменьшения F: C_max = " + cMax, now);
             }
         }
     }
@@ -456,8 +453,8 @@ public class ManagerAgent extends Agent {
         if (exchangeLog.isEmpty()) {
             r.add("(обменов не было)");
         } else {
-            r.add(String.format("%4s | %-60s | %-9s | %-9s | %s | %s", "№", "Участники (вес после обмена)",
-                    "F", "F_best", "C", "W"));
+            r.add(String.format("%4s | %-60s | %-9s | %s | %s", "№", "Участники (вес после обмена)",
+                    "F", "C", "W"));
             r.addAll(exchangeLog);
         }
         r.add("");
@@ -496,9 +493,6 @@ public class ManagerAgent extends Agent {
             r.add("Минимальный вес:                " + Common.kg(min));
             r.add("Максимальный вес:               " + Common.kg(max));
             r.add("Итоговый разброс F:             " + Common.kg(max - min));
-        }
-        if (!initialBags.isEmpty()) {
-            r.add("Лучший достигнутый разброс:     " + Common.kg(fBest));
         }
         r.add("Выполнено обменов:              " + completed);
         r.add(line);
